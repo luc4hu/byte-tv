@@ -1,12 +1,12 @@
 {
-  "name": "my-app",
-  "productName": "my-app",
+  "name": "byte-tv",
+  "productName": "byte-tv",
   "version": "1.0.0",
-  "description": "My Electron application description",
+  "description": "Desktop IPTV channel browser and player",
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {
-    "start": "electron-forge start",
+    "start": "ELECTRON_DISABLE_SANDBOX=1 electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",

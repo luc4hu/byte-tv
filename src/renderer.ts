@@ -6,6 +6,7 @@ interface Channel {
   logo: string;
   group_title: string;
   stream_url: string;
+  playlist_id: number;
 }
 
 interface Category {
@@ -13,15 +14,29 @@ interface Category {
   count: number;
 }
 
+interface Playlist {
+  id: number;
+  name: string;
+  path: string | null;
+  added_date: string;
+  channel_count: number;
+}
+
 declare global {
   interface Window {
     electronAPI: {
-      openFile: () => Promise<{ canceled: boolean; count?: number }>;
+      addPlaylist: () => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
+      addPlaylistFromURL: (url: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
+      getPlaylists: () => Promise<Playlist[]>;
+      deletePlaylist: (id: number) => Promise<void>;
+      refreshPlaylist: (id: number) => Promise<{ count: number }>;
       getChannels: () => Promise<Channel[]>;
       searchChannels: (query: string) => Promise<Channel[]>;
       playChannel: (url: string) => Promise<void>;
       getFavourites: () => Promise<string[]>;
       toggleFavourite: (streamUrl: string) => Promise<{ isFavourite: boolean }>;
+      getSetting: (key: string) => Promise<string>;
+      setSetting: (key: string, value: string) => Promise<void>;
       getCacheSize: () => Promise<number>;
       clearCache: () => Promise<number>;
     };
@@ -30,11 +45,11 @@ declare global {
 
 const grid = document.getElementById('channel-grid') as HTMLElement;
 const emptyState = document.getElementById('empty-state') as HTMLElement;
-const uploadBtn = document.getElementById('upload-btn') as HTMLElement;
 const searchInput = document.getElementById('search-input') as HTMLInputElement;
 const debugTimer = document.getElementById('debug-timer') as HTMLElement;
 const toggleBtns = document.querySelectorAll<HTMLButtonElement>('.toggle-btn');
-const themeToggle = document.getElementById('theme-toggle');
+const settingsToggleBtn = document.getElementById('settings-toggle') as HTMLButtonElement;
+const settingsPage = document.getElementById('settings-page') as HTMLElement;
 
 // Theme management
 function setTheme(theme: 'light' | 'dark') {
@@ -51,13 +66,6 @@ function initTheme() {
   }
 }
 
-if (themeToggle) {
-  themeToggle.addEventListener('click', () => {
-    const currentTheme = document.documentElement.getAttribute('data-theme');
-    setTheme(currentTheme === 'dark' ? 'light' : 'dark');
-  });
-}
-
 initTheme();
 
 // In-memory caches
@@ -72,6 +80,13 @@ const RENDER_LIMIT = 200;
 // View state
 let viewMode: 'channels' | 'categories' | 'favourites' = 'channels';
 let drillCategory: string | null = null;
+let settingsOpen = false;
+let stripSuperscript = false;
+
+const SUPERSCRIPT_RE = /[\u00AA\u00B2\u00B3\u00B9\u00BA\u02B0-\u02FF\u1D2C-\u1D6A\u1D78\u1D9B-\u1DBF\u2070-\u207F]/g;
+function stripSuperscripts(s: string): string {
+  return s.replace(SUPERSCRIPT_RE, '').replace(/\s{2,}/g, ' ').trim();
+}
 
 function escapeHtml(str: string): string {
   const div = document.createElement('div');
@@ -79,8 +94,9 @@ function escapeHtml(str: string): string {
   return div.innerHTML;
 }
 
-function channelCardHTML(ch: Channel): string {
+function channelCardHTML(ch: Channel, strip = false): string {
   const isFav = favouriteUrls.has(ch.stream_url);
+  const displayName = strip ? stripSuperscripts(ch.name) : ch.name;
   return `
     <div class="channel-card" data-url="${escapeHtml(ch.stream_url)}">
       ${isFav ? '<span class="favourite-star">&#9733;</span>' : ''}
@@ -88,9 +104,9 @@ function channelCardHTML(ch: Channel): string {
         <img src="${escapeHtml(ch.logo)}" alt="" loading="lazy"
              decoding="async" width="100" height="50"
              onerror="this.dataset.error=''" />
-        <span class="logo-fallback">${escapeHtml(ch.name.charAt(0))}</span>
+        <span class="logo-fallback">${escapeHtml(displayName.charAt(0))}</span>
       </div>
-      <div class="channel-name">${escapeHtml(ch.name)}</div>
+      <div class="channel-name">${escapeHtml(displayName)}</div>
     </div>`;
 }
 
@@ -135,7 +151,6 @@ function renderCategories(categories: Category[]) {
 }
 
 function renderDrillView(category: string, channels: Channel[]) {
-  // Add/update drill header before the grid
   let header = document.querySelector('.drill-header') as HTMLElement | null;
   if (!header) {
     header = document.createElement('div');
@@ -156,7 +171,6 @@ function buildIndex(channels: Channel[]) {
   allChannels = channels;
   channelNamesLower = channels.map(ch => ch.name.toLowerCase());
 
-  // Derive categories from group_title
   const catMap = new Map<string, number>();
   for (const ch of channels) {
     const group = ch.group_title || 'Uncategorized';
@@ -172,7 +186,6 @@ function search(query: string) {
   const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
 
   if (drillCategory) {
-    // Drill mode: filter channels within this category
     const catChannels = allChannels.filter(ch => (ch.group_title || 'Uncategorized') === drillCategory);
     let results: Channel[];
     if (tokens.length === 0) {
@@ -210,7 +223,14 @@ function search(query: string) {
     }
     const elapsed = performance.now() - t0;
     debugTimer.textContent = `${results.length} results in ${elapsed.toFixed(1)}ms`;
-    renderChannels(results);
+    if (results.length === 0) {
+      grid.innerHTML = '';
+      emptyState.style.display = 'block';
+    } else {
+      emptyState.style.display = 'none';
+      const itemsToRender = results.slice(0, RENDER_LIMIT);
+      grid.innerHTML = itemsToRender.map(ch => channelCardHTML(ch, stripSuperscript)).join('');
+    }
   } else if (viewMode === 'channels') {
     let results: Channel[];
     if (tokens.length === 0) {
@@ -231,7 +251,6 @@ function search(query: string) {
     debugTimer.textContent = `${results.length} results in ${elapsed.toFixed(1)}ms`;
     renderChannels(results);
   } else {
-    // Categories mode
     let results: Category[];
     if (tokens.length === 0) {
       results = allCategories;
@@ -259,19 +278,223 @@ function refresh() {
 }
 
 async function loadChannels() {
-  const [channels, favUrls] = await Promise.all([
+  const [channels, favUrls, stripSuperscriptSetting] = await Promise.all([
     window.electronAPI.getChannels(),
     window.electronAPI.getFavourites(),
+    window.electronAPI.getSetting('strip_superscript'),
   ]);
   favouriteUrls = new Set(favUrls);
+  stripSuperscript = stripSuperscriptSetting === '1';
   buildIndex(channels);
   debugTimer.textContent = `${allChannels.length} channels loaded`;
   refresh();
 }
 
+// Settings page
+function showSettings() {
+  settingsOpen = true;
+  settingsToggleBtn.classList.add('active');
+  settingsPage.style.display = 'block';
+  grid.style.display = 'none';
+  emptyState.style.display = 'none';
+  document.querySelector('.drill-header')?.remove();
+  renderSettings();
+}
+
+function hideSettings() {
+  settingsOpen = false;
+  settingsToggleBtn.classList.remove('active');
+  settingsPage.style.display = 'none';
+  grid.style.display = '';
+  refresh();
+}
+
+async function renderSettings() {
+  const [playlists, mpvFlags, cacheSize, stripSuperscriptSetting] = await Promise.all([
+    window.electronAPI.getPlaylists(),
+    window.electronAPI.getSetting('mpv_flags'),
+    window.electronAPI.getCacheSize(),
+    window.electronAPI.getSetting('strip_superscript'),
+  ]);
+
+  const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+  const cacheMB = (cacheSize / 1024 / 1024).toFixed(2);
+
+  settingsPage.innerHTML = `
+    <div class="settings-section">
+      <h2>Playlists</h2>
+      <div id="playlist-list">
+        ${playlists.length === 0 ? '<p class="settings-empty">No playlists added yet.</p>' : ''}
+        ${playlists.map(p => `
+          <div class="playlist-item" data-id="${p.id}">
+            <div class="playlist-item-info">
+              <span class="playlist-item-name">${escapeHtml(p.name)}</span>
+              <span class="playlist-item-meta">${p.channel_count} channels${p.path ? ' &middot; ' + escapeHtml(p.path) : ''}</span>
+            </div>
+            <div class="playlist-item-actions">
+              <button class="refresh-btn" data-id="${p.id}">Refresh</button>
+              <button class="delete-btn" data-id="${p.id}">Delete</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      <div class="playlist-add-actions">
+        <button id="add-playlist-btn">Add Playlist</button>
+        <button id="add-url-btn">Add URL</button>
+      </div>
+      <div id="url-input-row" class="url-input-row" style="display:none">
+        <input id="url-input" type="url" placeholder="https://example.com/playlist.m3u" />
+        <button id="url-confirm-btn">Add</button>
+        <button id="url-cancel-btn">Cancel</button>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <h2>mpv Flags</h2>
+      <p class="settings-hint">Custom flags passed to mpv on playback (space-separated).</p>
+      <textarea id="mpv-flags-input" placeholder="e.g. --vo=gpu --hwdec=auto">${escapeHtml(mpvFlags)}</textarea>
+    </div>
+
+    <div class="settings-section">
+      <h2>Appearance</h2>
+      <div class="theme-setting">
+        <span>Theme</span>
+        <div class="view-toggle">
+          <button class="toggle-btn theme-btn ${currentTheme === 'light' ? 'active' : ''}" data-theme="light">Light</button>
+          <button class="toggle-btn theme-btn ${currentTheme === 'dark' ? 'active' : ''}" data-theme="dark">Dark</button>
+        </div>
+      </div>
+      <div class="theme-setting">
+        <span>Strip superscript (favourites)</span>
+        <div class="view-toggle">
+          <button class="toggle-btn strip-super-btn ${stripSuperscriptSetting === '1' ? 'active' : ''}" data-strip-super="1">On</button>
+          <button class="toggle-btn strip-super-btn ${stripSuperscriptSetting !== '1' ? 'active' : ''}" data-strip-super="0">Off</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <h2>Cache</h2>
+      <div class="cache-setting">
+        <span>Browser cache: ${cacheMB} MB</span>
+        <button id="settings-clear-cache">Clear</button>
+      </div>
+    </div>
+  `;
+
+  // Wire up event listeners
+  document.getElementById('add-playlist-btn')?.addEventListener('click', async () => {
+    const result = await window.electronAPI.addPlaylist();
+    if (!result.canceled) {
+      await loadChannels();
+      renderSettings();
+    }
+  });
+
+  const urlInputRow = document.getElementById('url-input-row');
+  const urlInput = document.getElementById('url-input') as HTMLInputElement;
+
+  document.getElementById('add-url-btn')?.addEventListener('click', () => {
+    if (urlInputRow) urlInputRow.style.display = '';
+    if (urlInput) { urlInput.value = ''; urlInput.focus(); }
+  });
+
+  document.getElementById('url-cancel-btn')?.addEventListener('click', () => {
+    if (urlInputRow) urlInputRow.style.display = 'none';
+  });
+
+  document.getElementById('url-confirm-btn')?.addEventListener('click', async () => {
+    const url = urlInput.value.trim();
+    if (!url) return;
+    const confirmBtn = document.getElementById('url-confirm-btn') as HTMLButtonElement;
+    confirmBtn.textContent = '...';
+    confirmBtn.disabled = true;
+    try {
+      const result = await window.electronAPI.addPlaylistFromURL(url);
+      if (!result.canceled) {
+        await loadChannels();
+        renderSettings();
+      }
+    } catch {
+      confirmBtn.textContent = 'Error';
+      confirmBtn.disabled = false;
+    }
+  });
+
+  for (const btn of settingsPage.querySelectorAll<HTMLButtonElement>('.refresh-btn')) {
+    btn.addEventListener('click', async () => {
+      const id = Number(btn.dataset.id);
+      btn.textContent = '...';
+      btn.disabled = true;
+      try {
+        await window.electronAPI.refreshPlaylist(id);
+        await loadChannels();
+      } catch (e) {
+        btn.textContent = 'Error';
+      }
+      renderSettings();
+    });
+  }
+
+  for (const btn of settingsPage.querySelectorAll<HTMLButtonElement>('.delete-btn')) {
+    btn.addEventListener('click', async () => {
+      const id = Number(btn.dataset.id);
+      await window.electronAPI.deletePlaylist(id);
+      await loadChannels();
+      renderSettings();
+    });
+  }
+
+  const mpvInput = document.getElementById('mpv-flags-input') as HTMLTextAreaElement;
+  mpvInput?.addEventListener('blur', () => {
+    window.electronAPI.setSetting('mpv_flags', mpvInput.value);
+  });
+
+  for (const btn of settingsPage.querySelectorAll<HTMLButtonElement>('.theme-btn')) {
+    btn.addEventListener('click', () => {
+      const theme = btn.dataset.theme as 'light' | 'dark';
+      setTheme(theme);
+      for (const b of settingsPage.querySelectorAll<HTMLButtonElement>('.theme-btn')) {
+        b.classList.toggle('active', b === btn);
+      }
+    });
+  }
+
+  for (const btn of settingsPage.querySelectorAll<HTMLButtonElement>('.strip-super-btn')) {
+    btn.addEventListener('click', () => {
+      stripSuperscript = btn.dataset.stripSuper === '1';
+      window.electronAPI.setSetting('strip_superscript', stripSuperscript ? '1' : '0');
+      for (const b of settingsPage.querySelectorAll<HTMLButtonElement>('.strip-super-btn')) {
+        b.classList.toggle('active', b === btn);
+      }
+    });
+  }
+
+  document.getElementById('settings-clear-cache')?.addEventListener('click', async () => {
+    const btn = document.getElementById('settings-clear-cache') as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = '...';
+    const newSize = await window.electronAPI.clearCache();
+    const newMB = (newSize / 1024 / 1024).toFixed(2);
+    btn.textContent = 'Clear';
+    btn.disabled = false;
+    const cacheSpan = btn.parentElement?.querySelector('span');
+    if (cacheSpan) cacheSpan.textContent = `Browser cache: ${newMB} MB`;
+  });
+}
+
+settingsToggleBtn.addEventListener('click', () => {
+  if (settingsOpen) {
+    hideSettings();
+  } else {
+    showSettings();
+  }
+});
+
 // Toggle buttons
 for (const btn of toggleBtns) {
   btn.addEventListener('click', () => {
+    if (settingsOpen) hideSettings();
     if (btn.dataset.view === viewMode && !drillCategory) return;
     for (const b of toggleBtns) b.classList.toggle('active', b === btn);
     viewMode = btn.dataset.view as 'channels' | 'categories' | 'favourites';
@@ -284,13 +507,6 @@ for (const btn of toggleBtns) {
     refresh();
   });
 }
-
-uploadBtn.addEventListener('click', async () => {
-  const result = await window.electronAPI.openFile();
-  if (!result.canceled) {
-    await loadChannels();
-  }
-});
 
 let debounceTimer: number;
 searchInput.addEventListener('input', () => {
@@ -315,6 +531,8 @@ grid.addEventListener('click', (e) => {
 
   const card = target.closest('.channel-card') as HTMLElement | null;
   if (card?.dataset.url) {
+    grid.querySelector('.channel-card.loading')?.classList.remove('loading');
+    card.classList.add('loading');
     window.electronAPI.playChannel(card.dataset.url);
   }
 });
@@ -351,31 +569,5 @@ document.addEventListener('keydown', (e) => {
     searchInput.focus();
   }
 });
-
-// Update cache size every second
-const cacheSizeText = document.getElementById('cache-size-text');
-const clearCacheBtn = document.getElementById('clear-cache-btn') as HTMLButtonElement;
-
-async function updateCacheSize() {
-  if (!cacheSizeText) return;
-  const sizeInBytes = await window.electronAPI.getCacheSize();
-  const sizeInMB = (sizeInBytes / 1024 / 1024).toFixed(2);
-  cacheSizeText.textContent = `Cache: ${sizeInMB} MB`;
-}
-
-if (clearCacheBtn) {
-  clearCacheBtn.addEventListener('click', async () => {
-    clearCacheBtn.disabled = true;
-    clearCacheBtn.textContent = '...';
-    const newSize = await window.electronAPI.clearCache();
-    const sizeInMB = (newSize / 1024 / 1024).toFixed(2);
-    if (cacheSizeText) cacheSizeText.textContent = `Cache: ${sizeInMB} MB`;
-    clearCacheBtn.textContent = 'Clear';
-    clearCacheBtn.disabled = false;
-  });
-}
-
-setInterval(updateCacheSize, 1000);
-updateCacheSize();
 
 loadChannels();

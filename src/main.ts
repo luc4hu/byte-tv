@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, session } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -56,13 +56,23 @@ let db: DatabaseSync;
 function initDB() {
   const dbPath = path.join(app.getPath('userData'), 'channels.db');
   db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA foreign_keys = ON');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS playlists (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      path TEXT,
+      added_date TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
   db.exec(`
     CREATE TABLE IF NOT EXISTS channels (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       logo TEXT,
       group_title TEXT,
-      stream_url TEXT NOT NULL
+      stream_url TEXT NOT NULL,
+      playlist_id INTEGER REFERENCES playlists(id) ON DELETE CASCADE
     )
   `);
   db.exec(`
@@ -70,10 +80,17 @@ function initDB() {
       stream_url TEXT PRIMARY KEY NOT NULL
     )
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL DEFAULT ''
+    )
+  `);
 }
 
 function registerIPC() {
-  ipcMain.handle('dialog:openFile', async () => {
+  // Playlist management
+  ipcMain.handle('playlists:add', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [{ name: 'M3U Playlist', extensions: ['m3u', 'm3u8'] }],
@@ -82,27 +99,123 @@ function registerIPC() {
       return { canceled: true };
     }
 
-    const content = fs.readFileSync(result.filePaths[0], 'utf-8');
+    const filePath = result.filePaths[0];
+    const playlistName = path.basename(filePath, path.extname(filePath));
+    const content = fs.readFileSync(filePath, 'utf-8');
     const channels = parseM3U(content);
 
     db.exec('BEGIN');
     try {
-      db.exec('DELETE FROM channels');
+      db.prepare('INSERT INTO playlists (name, path) VALUES (?, ?)').run(playlistName, filePath);
+      const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
+
       const insert = db.prepare(
-        'INSERT INTO channels (name, logo, group_title, stream_url) VALUES (?, ?, ?, ?)'
+        'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
       );
       for (const ch of channels) {
-        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl);
+        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
       db.exec('COMMIT');
+      return { canceled: false, playlistId, count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
       throw e;
     }
-
-    return { canceled: false, count: channels.length };
   });
 
+  ipcMain.handle('playlists:addFromURL', async (_event, url: string) => {
+    const response = await net.fetch(url);
+    if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.status}`);
+    const content = await response.text();
+    const channels = parseM3U(content);
+
+    let playlistName: string;
+    try {
+      const parsed = new URL(url);
+      const base = path.basename(parsed.pathname, path.extname(parsed.pathname));
+      playlistName = base && base !== '/' ? base : parsed.hostname;
+    } catch {
+      playlistName = url;
+    }
+
+    db.exec('BEGIN');
+    try {
+      db.prepare('INSERT INTO playlists (name, path) VALUES (?, ?)').run(playlistName, url);
+      const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
+
+      const insert = db.prepare(
+        'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
+      );
+      for (const ch of channels) {
+        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
+      }
+      db.exec('COMMIT');
+      return { canceled: false, playlistId, count: channels.length };
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  });
+
+  ipcMain.handle('playlists:getAll', () => {
+    return db.prepare(`
+      SELECT p.id, p.name, p.path, p.added_date,
+             COUNT(c.id) as channel_count
+      FROM playlists p
+      LEFT JOIN channels c ON c.playlist_id = p.id
+      GROUP BY p.id
+      ORDER BY p.id ASC
+    `).all();
+  });
+
+  ipcMain.handle('playlists:delete', (_event, playlistId: number) => {
+    db.prepare('DELETE FROM playlists WHERE id = ?').run(playlistId);
+  });
+
+  ipcMain.handle('playlists:refresh', async (_event, playlistId: number) => {
+    const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(playlistId) as { id: number; path: string | null } | undefined;
+    if (!playlist) throw new Error('Playlist not found');
+    if (!playlist.path) throw new Error('No file path for playlist');
+
+    const isURL = /^https?:\/\//i.test(playlist.path);
+    let content: string;
+    if (isURL) {
+      const response = await net.fetch(playlist.path);
+      if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.status}`);
+      content = await response.text();
+    } else {
+      content = fs.readFileSync(playlist.path, 'utf-8');
+    }
+    const channels = parseM3U(content);
+
+    db.exec('BEGIN');
+    try {
+      db.prepare('DELETE FROM channels WHERE playlist_id = ?').run(playlistId);
+      const insert = db.prepare(
+        'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
+      );
+      for (const ch of channels) {
+        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
+      }
+      db.exec('COMMIT');
+      return { count: channels.length };
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  });
+
+  // Settings
+  ipcMain.handle('settings:get', (_event, key: string) => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    return row?.value ?? '';
+  });
+
+  ipcMain.handle('settings:set', (_event, key: string, value: string) => {
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+  });
+
+  // Channels
   ipcMain.handle('channels:getAll', () => {
     return db.prepare('SELECT * FROM channels ORDER BY id ASC').all();
   });
@@ -114,10 +227,15 @@ function registerIPC() {
   });
 
   ipcMain.handle('channels:play', (_event, url: string) => {
-    const child = spawn('mpv', [url], { detached: true, stdio: 'ignore' });
+    const flagsStr = (db.prepare('SELECT value FROM settings WHERE key = ?').get('mpv_flags') as { value: string } | undefined)?.value ?? '';
+    const flags = flagsStr.trim() ? flagsStr.trim().split(/\s+/) : [];
+    const args = [...flags, url];
+    console.log('mpv', args.join(' '));
+    const child = spawn('mpv', args, { detached: true, stdio: 'ignore' });
     child.unref();
   });
 
+  // Favourites
   ipcMain.handle('favourites:getAll', () => {
     const rows = db.prepare('SELECT stream_url FROM favourites').all() as { stream_url: string }[];
     return rows.map(r => r.stream_url);
@@ -134,6 +252,7 @@ function registerIPC() {
     }
   });
 
+  // Cache
   ipcMain.handle('cache:getSize', async () => {
     return await session.defaultSession.getCacheSize();
   });
