@@ -19,6 +19,23 @@ interface Channel {
   streamUrl: string;
 }
 
+interface XtreamAuthResponse {
+  user_info: { auth: number; status: string };
+  server_info: { url: string; port: string };
+}
+
+interface XtreamCategory {
+  category_id: string;
+  category_name: string;
+}
+
+interface XtreamStream {
+  stream_id: number;
+  name: string;
+  stream_icon: string;
+  category_id: string;
+}
+
 function parseM3U(content: string): Channel[] {
   const lines = content.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   const channels: Channel[] = [];
@@ -51,6 +68,44 @@ function parseM3U(content: string): Channel[] {
   return channels;
 }
 
+async function fetchXtreamChannels(
+  serverUrl: string,
+  username: string,
+  password: string,
+): Promise<Channel[]> {
+  const base = serverUrl.replace(/\/+$/, '');
+  const apiUrl = `${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+
+  // Authenticate
+  const authRes = await net.fetch(apiUrl);
+  if (!authRes.ok) throw new Error(`Xtream server error: ${authRes.status}`);
+  const auth = (await authRes.json()) as XtreamAuthResponse;
+  if (auth.user_info?.auth !== 1) {
+    throw new Error('Xtream authentication failed: invalid credentials or account inactive');
+  }
+
+  // Fetch live categories
+  const catRes = await net.fetch(`${apiUrl}&action=get_live_categories`);
+  if (!catRes.ok) throw new Error(`Failed to fetch categories: ${catRes.status}`);
+  const categories = (await catRes.json()) as XtreamCategory[];
+  const categoryMap = new Map<string, string>();
+  for (const cat of categories) {
+    categoryMap.set(String(cat.category_id), cat.category_name);
+  }
+
+  // Fetch live streams
+  const streamRes = await net.fetch(`${apiUrl}&action=get_live_streams`);
+  if (!streamRes.ok) throw new Error(`Failed to fetch streams: ${streamRes.status}`);
+  const streams = (await streamRes.json()) as XtreamStream[];
+
+  return streams.map((s) => ({
+    name: s.name,
+    logo: s.stream_icon || '',
+    groupTitle: categoryMap.get(String(s.category_id)) || '',
+    streamUrl: `${base}/live/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${s.stream_id}.ts`,
+  }));
+}
+
 let db: DatabaseSync;
 
 function initDB() {
@@ -62,9 +117,16 @@ function initDB() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       path TEXT,
+      type TEXT NOT NULL DEFAULT 'm3u',
+      xtream_username TEXT,
+      xtream_password TEXT,
       added_date TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
+  // Migrations for existing installs
+  try { db.exec("ALTER TABLE playlists ADD COLUMN type TEXT NOT NULL DEFAULT 'm3u'"); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_username TEXT'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_password TEXT'); } catch { /* already exists */ }
   db.exec(`
     CREATE TABLE IF NOT EXISTS channels (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,9 +219,41 @@ function registerIPC() {
     }
   });
 
+  ipcMain.handle('playlists:addXtream', async (_event, serverUrl: string, username: string, password: string) => {
+    const channels = await fetchXtreamChannels(serverUrl, username, password);
+    const normalizedUrl = serverUrl.replace(/\/+$/, '');
+
+    let playlistName: string;
+    try {
+      playlistName = new URL(normalizedUrl).hostname;
+    } catch {
+      playlistName = normalizedUrl;
+    }
+
+    db.exec('BEGIN');
+    try {
+      db.prepare(
+        "INSERT INTO playlists (name, path, type, xtream_username, xtream_password) VALUES (?, ?, 'xtream', ?, ?)"
+      ).run(playlistName, normalizedUrl, username, password);
+      const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
+
+      const insert = db.prepare(
+        'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
+      );
+      for (const ch of channels) {
+        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
+      }
+      db.exec('COMMIT');
+      return { canceled: false, playlistId, count: channels.length };
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  });
+
   ipcMain.handle('playlists:getAll', () => {
     return db.prepare(`
-      SELECT p.id, p.name, p.path, p.added_date,
+      SELECT p.id, p.name, p.path, p.type, p.added_date,
              COUNT(c.id) as channel_count
       FROM playlists p
       LEFT JOIN channels c ON c.playlist_id = p.id
@@ -173,20 +267,26 @@ function registerIPC() {
   });
 
   ipcMain.handle('playlists:refresh', async (_event, playlistId: number) => {
-    const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(playlistId) as { id: number; path: string | null } | undefined;
+    const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(playlistId) as
+      { id: number; path: string | null; type: string; xtream_username: string | null; xtream_password: string | null } | undefined;
     if (!playlist) throw new Error('Playlist not found');
-    if (!playlist.path) throw new Error('No file path for playlist');
+    if (!playlist.path) throw new Error('No path for playlist');
 
-    const isURL = /^https?:\/\//i.test(playlist.path);
-    let content: string;
-    if (isURL) {
-      const response = await net.fetch(playlist.path);
-      if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.status}`);
-      content = await response.text();
+    let channels: Channel[];
+    if (playlist.type === 'xtream') {
+      channels = await fetchXtreamChannels(playlist.path, playlist.xtream_username!, playlist.xtream_password!);
     } else {
-      content = fs.readFileSync(playlist.path, 'utf-8');
+      const isURL = /^https?:\/\//i.test(playlist.path);
+      let content: string;
+      if (isURL) {
+        const response = await net.fetch(playlist.path);
+        if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.status}`);
+        content = await response.text();
+      } else {
+        content = fs.readFileSync(playlist.path, 'utf-8');
+      }
+      channels = parseM3U(content);
     }
-    const channels = parseM3U(content);
 
     db.exec('BEGIN');
     try {
@@ -295,9 +395,17 @@ const createWindow = () => {
 };
 
 app.on('ready', () => {
+  const t0 = Date.now();
+  console.log('[startup] app ready');
+
   initDB();
+  console.log(`[startup] initDB done in ${Date.now() - t0}ms`);
+
   registerIPC();
+  console.log(`[startup] registerIPC done in ${Date.now() - t0}ms`);
+
   createWindow();
+  console.log(`[startup] createWindow done in ${Date.now() - t0}ms`);
 });
 
 app.on('window-all-closed', () => {

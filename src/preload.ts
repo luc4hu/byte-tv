@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Playlists
   addPlaylist: () => ipcRenderer.invoke('playlists:add'),
   addPlaylistFromURL: (url: string) => ipcRenderer.invoke('playlists:addFromURL', url),
+  addXtreamPlaylist: (serverUrl: string, username: string, password: string) => ipcRenderer.invoke('playlists:addXtream', serverUrl, username, password),
   getPlaylists: () => ipcRenderer.invoke('playlists:getAll'),
   deletePlaylist: (id: number) => ipcRenderer.invoke('playlists:delete', id),
   refreshPlaylist: (id: number) => ipcRenderer.invoke('playlists:refresh', id),

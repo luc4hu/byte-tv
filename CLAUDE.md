@@ -23,9 +23,14 @@ Three-process Electron app built with Electron Forge + Vite:
 
 - **Main process** (`src/main.ts`) — SQLite database (node:sqlite `DatabaseSync`), M3U parser, IPC handlers, spawns mpv for playback
 - **Preload** (`src/preload.ts`) — Context bridge exposing `window.electronAPI` with typed IPC methods
-- **Renderer** (`src/renderer.ts`) — Vanilla DOM manipulation, in-memory channel/category index, multi-token search, view mode state machine (channels/categories/favourites + drill-down)
+- **Renderer** — React 18 UI with two view components:
+  - `src/renderer.tsx` — Entry point, mounts `<App />`
+  - `src/App.tsx` — Root component with lifted state, toolbar, view routing
+  - `src/MainView.tsx` — Channel/category/favourites grid, search filtering via `useMemo`, drill-down
+  - `src/SettingsView.tsx` — Playlists CRUD, MPV flags, theme toggle, cache management
+  - `src/types.ts` — Shared interfaces (`Channel`, `Category`, `Playlist`) and `window.electronAPI` type declarations
 
-All UI is vanilla TypeScript with no framework. Styling in `src/index.css` uses CSS custom properties for light/dark theming (toggled via `data-theme` attribute on `<html>`).
+Styling in `src/index.css` uses CSS custom properties for light/dark theming (toggled via `data-theme` attribute on `<html>`).
 
 ## Key Patterns
 
@@ -37,7 +42,7 @@ All UI is vanilla TypeScript with no framework. Styling in `src/index.css` uses 
 
 ## Build Configuration
 
-- Electron Forge with Vite plugin (three configs: main, preload, renderer — all minimal/default)
+- Electron Forge with Vite plugin (three configs: main, preload, renderer — renderer uses `@vitejs/plugin-react`)
 - TypeScript targeting ESNext with CommonJS modules
 - Electron Fuses enabled for security hardening (ASAR integrity, cookie encryption, RunAsNode disabled)
 - Vite dev server URL injected as `MAIN_WINDOW_VITE_DEV_SERVER_URL` global

@@ -74,6 +74,14 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -470,7 +478,8 @@ main {
 }
 
 #add-playlist-btn,
-#add-url-btn {
+#add-url-btn,
+#add-xtream-btn {
   padding: 8px 18px;
   background: var(--bg-active);
   color: var(--text-on-active);
@@ -485,7 +494,8 @@ main {
 }
 
 #add-playlist-btn:hover,
-#add-url-btn:hover {
+#add-url-btn:hover,
+#add-xtream-btn:hover {
   background: var(--bg-active-hover);
 }
 
@@ -538,6 +548,67 @@ main {
 }
 
 .url-input-row #url-confirm-btn:hover {
+  background: var(--bg-active-hover);
+}
+
+.xtream-input-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.xtream-input-form input {
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  background: var(--bg-card);
+  color: var(--text-main);
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  height: 36px;
+}
+
+.xtream-input-form input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.xtream-error {
+  font-size: 12px;
+  color: #ef4444;
+}
+
+.xtream-input-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.xtream-input-actions button {
+  padding: 8px 14px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  height: 36px;
+  background: var(--bg-card);
+  color: var(--text-main);
+  transition: border-color 0.15s;
+}
+
+.xtream-input-actions button:hover {
+  border-color: var(--border-hover);
+}
+
+.xtream-input-actions .xtream-confirm-btn {
+  background: var(--bg-active);
+  color: var(--text-on-active);
+  border-color: transparent;
+}
+
+.xtream-input-actions .xtream-confirm-btn:hover {
   background: var(--bg-active-hover);
 }
 
