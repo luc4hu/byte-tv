@@ -155,7 +155,7 @@ export default function MainView({
   }, [onToggleFavourite]);
 
   const displayName = (ch: Channel) =>
-    stripSuperscript ? stripSuperscripts(ch.name) : ch.name;
+    stripSuperscript && viewMode === 'favourites' ? stripSuperscripts(ch.name) : ch.name;
 
   if (items.length === 0) {
     return (

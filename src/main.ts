@@ -161,11 +161,17 @@ function registerIPC() {
       return { canceled: true };
     }
 
+    const t0 = Date.now();
     const filePath = result.filePaths[0];
     const playlistName = path.basename(filePath, path.extname(filePath));
     const content = fs.readFileSync(filePath, 'utf-8');
-    const channels = parseM3U(content);
+    console.log(`[import:file] read file in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
 
+    const t1 = Date.now();
+    const channels = parseM3U(content);
+    console.log(`[import:file] parsed ${channels.length} channels in ${Date.now() - t1}ms`);
+
+    const t2 = Date.now();
     db.exec('BEGIN');
     try {
       db.prepare('INSERT INTO playlists (name, path) VALUES (?, ?)').run(playlistName, filePath);
@@ -178,6 +184,8 @@ function registerIPC() {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
       db.exec('COMMIT');
+      console.log(`[import:file] inserted ${channels.length} rows in ${Date.now() - t2}ms`);
+      console.log(`[import:file] total: ${Date.now() - t0}ms`);
       return { canceled: false, playlistId, count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
@@ -186,10 +194,15 @@ function registerIPC() {
   });
 
   ipcMain.handle('playlists:addFromURL', async (_event, url: string) => {
+    const t0 = Date.now();
     const response = await net.fetch(url);
     if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.status}`);
     const content = await response.text();
+    console.log(`[import:url] fetched in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
+
+    const t1 = Date.now();
     const channels = parseM3U(content);
+    console.log(`[import:url] parsed ${channels.length} channels in ${Date.now() - t1}ms`);
 
     let playlistName: string;
     try {
@@ -200,6 +213,7 @@ function registerIPC() {
       playlistName = url;
     }
 
+    const t2 = Date.now();
     db.exec('BEGIN');
     try {
       db.prepare('INSERT INTO playlists (name, path) VALUES (?, ?)').run(playlistName, url);
@@ -212,6 +226,8 @@ function registerIPC() {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
       db.exec('COMMIT');
+      console.log(`[import:url] inserted ${channels.length} rows in ${Date.now() - t2}ms`);
+      console.log(`[import:url] total: ${Date.now() - t0}ms`);
       return { canceled: false, playlistId, count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
@@ -220,7 +236,10 @@ function registerIPC() {
   });
 
   ipcMain.handle('playlists:addXtream', async (_event, serverUrl: string, username: string, password: string) => {
+    const t0 = Date.now();
     const channels = await fetchXtreamChannels(serverUrl, username, password);
+    console.log(`[import:xtream] fetched ${channels.length} channels in ${Date.now() - t0}ms`);
+
     const normalizedUrl = serverUrl.replace(/\/+$/, '');
 
     let playlistName: string;
@@ -230,6 +249,7 @@ function registerIPC() {
       playlistName = normalizedUrl;
     }
 
+    const t1 = Date.now();
     db.exec('BEGIN');
     try {
       db.prepare(
@@ -244,6 +264,8 @@ function registerIPC() {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
       db.exec('COMMIT');
+      console.log(`[import:xtream] inserted ${channels.length} rows in ${Date.now() - t1}ms`);
+      console.log(`[import:xtream] total: ${Date.now() - t0}ms`);
       return { canceled: false, playlistId, count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
@@ -267,14 +289,16 @@ function registerIPC() {
   });
 
   ipcMain.handle('playlists:refresh', async (_event, playlistId: number) => {
+    const t0 = Date.now();
     const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(playlistId) as
-      { id: number; path: string | null; type: string; xtream_username: string | null; xtream_password: string | null } | undefined;
+      { id: number; name: string; path: string | null; type: string; xtream_username: string | null; xtream_password: string | null } | undefined;
     if (!playlist) throw new Error('Playlist not found');
     if (!playlist.path) throw new Error('No path for playlist');
 
     let channels: Channel[];
     if (playlist.type === 'xtream') {
       channels = await fetchXtreamChannels(playlist.path, playlist.xtream_username!, playlist.xtream_password!);
+      console.log(`[refresh:${playlist.name}] fetched ${channels.length} xtream channels in ${Date.now() - t0}ms`);
     } else {
       const isURL = /^https?:\/\//i.test(playlist.path);
       let content: string;
@@ -282,12 +306,17 @@ function registerIPC() {
         const response = await net.fetch(playlist.path);
         if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.status}`);
         content = await response.text();
+        console.log(`[refresh:${playlist.name}] fetched URL in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
       } else {
         content = fs.readFileSync(playlist.path, 'utf-8');
+        console.log(`[refresh:${playlist.name}] read file in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
       }
+      const t1 = Date.now();
       channels = parseM3U(content);
+      console.log(`[refresh:${playlist.name}] parsed ${channels.length} channels in ${Date.now() - t1}ms`);
     }
 
+    const t2 = Date.now();
     db.exec('BEGIN');
     try {
       db.prepare('DELETE FROM channels WHERE playlist_id = ?').run(playlistId);
@@ -298,6 +327,8 @@ function registerIPC() {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
       db.exec('COMMIT');
+      console.log(`[refresh:${playlist.name}] deleted + inserted ${channels.length} rows in ${Date.now() - t2}ms`);
+      console.log(`[refresh:${playlist.name}] total: ${Date.now() - t0}ms`);
       return { count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
