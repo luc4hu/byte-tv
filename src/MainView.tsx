@@ -11,24 +11,28 @@ function stripSuperscripts(s: string): string {
 interface MainViewProps {
   allChannels: Channel[];
   favouriteUrls: Set<string>;
+  historyUrls: string[];
   viewMode: ViewMode;
   searchQuery: string;
   stripSuperscript: boolean;
   drillCategory: string | null;
   setDrillCategory: (cat: string | null) => void;
   onToggleFavourite: (streamUrl: string) => void;
+  onPlayChannel: (url: string) => void;
   onDebugText: (text: string) => void;
 }
 
 export default function MainView({
   allChannels,
   favouriteUrls,
+  historyUrls,
   viewMode,
   searchQuery,
   stripSuperscript,
   drillCategory,
   setDrillCategory,
   onToggleFavourite,
+  onPlayChannel,
   onDebugText,
 }: MainViewProps) {
   const gridRef = useRef<HTMLDivElement>(null);
@@ -59,6 +63,24 @@ export default function MainView({
         channels = catChannels;
       } else {
         channels = catChannels.filter(ch => {
+          const name = ch.name.toLowerCase();
+          for (const tok of tokens) {
+            if (!name.includes(tok)) return false;
+          }
+          return true;
+        });
+      }
+    } else if (viewMode === 'history') {
+      const historyChannels: Channel[] = [];
+      const channelByUrl = new Map(allChannels.map(ch => [ch.stream_url, ch]));
+      for (const url of historyUrls) {
+        const ch = channelByUrl.get(url);
+        if (ch) historyChannels.push(ch);
+      }
+      if (tokens.length === 0) {
+        channels = historyChannels;
+      } else {
+        channels = historyChannels.filter(ch => {
           const name = ch.name.toLowerCase();
           for (const tok of tokens) {
             if (!name.includes(tok)) return false;
@@ -124,7 +146,7 @@ export default function MainView({
     }
     const totalCount = channels!.length;
     return { items: channels!.slice(0, RENDER_LIMIT), totalCount, elapsed, renderMode: 'channels' as const };
-  }, [allChannels, allCategories, channelNamesLower, categoryNamesLower, favouriteUrls, viewMode, drillCategory, searchQuery]);
+  }, [allChannels, allCategories, channelNamesLower, categoryNamesLower, favouriteUrls, historyUrls, viewMode, drillCategory, searchQuery]);
 
   useEffect(() => {
     onDebugText(`${totalCount} results in ${elapsed.toFixed(1)}ms`);
@@ -143,9 +165,9 @@ export default function MainView({
     if (card?.dataset.url) {
       gridRef.current?.querySelector('.channel-card.loading')?.classList.remove('loading');
       card.classList.add('loading');
-      window.electronAPI.playChannel(card.dataset.url);
+      onPlayChannel(card.dataset.url);
     }
-  }, [setDrillCategory]);
+  }, [setDrillCategory, onPlayChannel]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

@@ -21,7 +21,7 @@ export interface Playlist {
   channel_count: number;
 }
 
-export type ViewMode = 'channels' | 'categories' | 'favourites';
+export type ViewMode = 'channels' | 'categories' | 'history' | 'favourites';
 
 declare global {
   interface Window {
@@ -35,6 +35,7 @@ declare global {
       getChannels: () => Promise<Channel[]>;
       searchChannels: (query: string) => Promise<Channel[]>;
       playChannel: (url: string) => Promise<void>;
+      getHistory: () => Promise<string[]>;
       getFavourites: () => Promise<string[]>;
       toggleFavourite: (streamUrl: string) => Promise<{ isFavourite: boolean }>;
       getSetting: (key: string) => Promise<string>;

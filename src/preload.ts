@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   searchChannels: (query: string) => ipcRenderer.invoke('channels:search', query),
   playChannel: (url: string) => ipcRenderer.invoke('channels:play', url),
 
+  // History
+  getHistory: () => ipcRenderer.invoke('history:getAll'),
+
   // Favourites
   getFavourites: () => ipcRenderer.invoke('favourites:getAll'),
   toggleFavourite: (streamUrl: string) => ipcRenderer.invoke('favourites:toggle', streamUrl),

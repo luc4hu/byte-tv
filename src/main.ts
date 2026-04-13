@@ -143,6 +143,12 @@ function initDB() {
     )
   `);
   db.exec(`
+    CREATE TABLE IF NOT EXISTS history (
+      stream_url TEXT PRIMARY KEY NOT NULL,
+      last_played INTEGER NOT NULL
+    )
+  `);
+  db.exec(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY NOT NULL,
       value TEXT NOT NULL DEFAULT ''
@@ -358,12 +364,24 @@ function registerIPC() {
   });
 
   ipcMain.handle('channels:play', (_event, url: string) => {
+    db.prepare(`
+      INSERT INTO history (stream_url, last_played)
+      VALUES (?, ?)
+      ON CONFLICT(stream_url) DO UPDATE SET last_played = excluded.last_played
+    `).run(url, Date.now());
+
     const flagsStr = (db.prepare('SELECT value FROM settings WHERE key = ?').get('mpv_flags') as { value: string } | undefined)?.value ?? '';
     const flags = flagsStr.trim() ? flagsStr.trim().split(/\s+/) : [];
     const args = [...flags, url];
     console.log('mpv', args.join(' '));
     const child = spawn('mpv', args, { detached: true, stdio: 'ignore' });
     child.unref();
+  });
+
+  // History
+  ipcMain.handle('history:getAll', () => {
+    const rows = db.prepare('SELECT stream_url FROM history ORDER BY last_played DESC').all() as { stream_url: string }[];
+    return rows.map(r => r.stream_url);
   });
 
   // Favourites

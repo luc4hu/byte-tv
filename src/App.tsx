@@ -16,6 +16,7 @@ function initTheme() {
 export default function App() {
   const [allChannels, setAllChannels] = useState<Channel[]>([]);
   const [favouriteUrls, setFavouriteUrls] = useState<Set<string>>(new Set());
+  const [historyUrls, setHistoryUrls] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('channels');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -26,15 +27,17 @@ export default function App() {
 
   const loadChannels = useCallback(async () => {
     const t0 = performance.now();
-    const [channels, favUrls, stripSetting] = await Promise.all([
+    const [channels, favUrls, histUrls, stripSetting] = await Promise.all([
       window.electronAPI.getChannels(),
       window.electronAPI.getFavourites(),
+      window.electronAPI.getHistory(),
       window.electronAPI.getSetting('strip_superscript'),
     ]);
-    console.log(`[renderer] getChannels + getFavourites: ${performance.now() - t0}ms`);
+    console.log(`[renderer] getChannels + getFavourites + getHistory: ${performance.now() - t0}ms`);
 
     setAllChannels(channels);
     setFavouriteUrls(new Set(favUrls));
+    setHistoryUrls(histUrls);
     setStripSuperscript(stripSetting === '1');
     setDebugText(`${channels.length} channels loaded`);
     console.log(`[renderer] total loadChannels: ${performance.now() - t0}ms`);
@@ -70,6 +73,15 @@ export default function App() {
     });
   }, []);
 
+  const handlePlayChannel = useCallback((streamUrl: string) => {
+    window.electronAPI.playChannel(streamUrl);
+    setHistoryUrls(prev => {
+      const next = prev.filter(u => u !== streamUrl);
+      next.unshift(streamUrl);
+      return next;
+    });
+  }, []);
+
   const handleViewChange = (mode: ViewMode) => {
     if (settingsOpen) setSettingsOpen(false);
     if (mode === viewMode && !drillCategory) return;
@@ -88,14 +100,16 @@ export default function App() {
       ? 'Search channels...'
       : viewMode === 'categories'
         ? 'Search categories...'
-        : 'Search favourites...';
+        : viewMode === 'history'
+          ? 'Search history...'
+          : 'Search favourites...';
 
   return (
     <>
       <header className="toolbar">
         <div className="nav-left">
           <div className="view-toggle">
-            {(['channels', 'categories', 'favourites'] as const).map(mode => (
+            {(['channels', 'categories', 'history', 'favourites'] as const).map(mode => (
               <button
                 key={mode}
                 className={`toggle-btn${viewMode === mode && !settingsOpen ? ' active' : ''}`}
@@ -146,12 +160,14 @@ export default function App() {
           <MainView
             allChannels={allChannels}
             favouriteUrls={favouriteUrls}
+            historyUrls={historyUrls}
             viewMode={viewMode}
             searchQuery={searchQuery}
             stripSuperscript={stripSuperscript}
             drillCategory={drillCategory}
             setDrillCategory={setDrillCategory}
             onToggleFavourite={handleToggleFavourite}
+            onPlayChannel={handlePlayChannel}
             onDebugText={setDebugText}
           />
         )}
