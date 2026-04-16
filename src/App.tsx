@@ -23,6 +23,7 @@ export default function App() {
   const [stripSuperscript, setStripSuperscript] = useState(false);
   const [drillCategory, setDrillCategory] = useState<string | null>(null);
   const [debugText, setDebugText] = useState('');
+  const [autoRefreshingIds, setAutoRefreshingIds] = useState<Set<number>>(new Set());
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const loadChannels = useCallback(async () => {
@@ -45,7 +46,29 @@ export default function App() {
 
   useEffect(() => {
     initTheme();
-    loadChannels();
+    const init = async () => {
+      await loadChannels();
+
+      const autoRefreshSetting = await window.electronAPI.getSetting('auto_refresh');
+      if (autoRefreshSetting !== '1') return;
+
+      const playlists = await window.electronAPI.getPlaylists();
+      const promises = playlists.map(async (p) => {
+        setAutoRefreshingIds(prev => new Set([...prev, p.id]));
+        try {
+          await window.electronAPI.refreshPlaylist(p.id);
+        } finally {
+          setAutoRefreshingIds(prev => {
+            const next = new Set(prev);
+            next.delete(p.id);
+            return next;
+          });
+        }
+      });
+      await Promise.all(promises);
+      if (playlists.length > 0) await loadChannels();
+    };
+    init();
   }, [loadChannels]);
 
   // "/" to focus search
@@ -155,6 +178,7 @@ export default function App() {
             onReloadChannels={loadChannels}
             stripSuperscript={stripSuperscript}
             setStripSuperscript={setStripSuperscript}
+            autoRefreshingIds={autoRefreshingIds}
           />
         ) : (
           <MainView

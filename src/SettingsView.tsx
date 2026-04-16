@@ -5,12 +5,14 @@ interface SettingsViewProps {
   onReloadChannels: () => Promise<void>;
   stripSuperscript: boolean;
   setStripSuperscript: (value: boolean) => void;
+  autoRefreshingIds: Set<number>;
 }
 
 export default function SettingsView({
   onReloadChannels,
   stripSuperscript,
   setStripSuperscript,
+  autoRefreshingIds,
 }: SettingsViewProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [mpvFlags, setMpvFlags] = useState('');
@@ -28,16 +30,19 @@ export default function SettingsView({
   const [currentTheme, setCurrentTheme] = useState<'light' | 'dark'>(
     () => (document.documentElement.getAttribute('data-theme') as 'light' | 'dark') || 'light'
   );
+  const [autoRefresh, setAutoRefresh] = useState(false);
 
   const loadSettings = useCallback(async () => {
-    const [pl, flags, cache] = await Promise.all([
+    const [pl, flags, cache, arSetting] = await Promise.all([
       window.electronAPI.getPlaylists(),
       window.electronAPI.getSetting('mpv_flags'),
       window.electronAPI.getCacheSize(),
+      window.electronAPI.getSetting('auto_refresh'),
     ]);
     setPlaylists(pl);
     setMpvFlags(flags || '');
     setCacheSize(cache);
+    setAutoRefresh(arSetting === '1');
   }, []);
 
   useEffect(() => {
@@ -118,6 +123,11 @@ export default function SettingsView({
     setCurrentTheme(theme);
   };
 
+  const handleAutoRefreshChange = (value: boolean) => {
+    setAutoRefresh(value);
+    window.electronAPI.setSetting('auto_refresh', value ? '1' : '0');
+  };
+
   const handleStripSuperscriptChange = (value: boolean) => {
     setStripSuperscript(value);
     window.electronAPI.setSetting('strip_superscript', value ? '1' : '0');
@@ -138,28 +148,31 @@ export default function SettingsView({
           {playlists.length === 0 && (
             <p className="settings-empty">No playlists added yet.</p>
           )}
-          {playlists.map(p => (
-            <div key={p.id} className="playlist-item" data-id={p.id}>
-              <div className="playlist-item-info">
-                <span className="playlist-item-name">{p.name}</span>
-                <span className="playlist-item-meta">
-                  {p.channel_count} channels{p.type === 'xtream' ? ' \u00B7 Xtream' : p.path ? ` \u00B7 ${p.path}` : ''}
-                </span>
+          {playlists.map(p => {
+            const isRefreshing = refreshingId === p.id || autoRefreshingIds.has(p.id);
+            return (
+              <div key={p.id} className="playlist-item" data-id={p.id}>
+                <div className="playlist-item-info">
+                  <span className="playlist-item-name">{p.name}</span>
+                  <span className="playlist-item-meta">
+                    {p.channel_count} channels{p.type === 'xtream' ? ' \u00B7 Xtream' : p.path ? ` \u00B7 ${p.path}` : ''}
+                  </span>
+                </div>
+                <div className="playlist-item-actions">
+                  <button
+                    className="refresh-btn"
+                    disabled={isRefreshing}
+                    onClick={() => handleRefresh(p.id)}
+                  >
+                    {isRefreshing ? '...' : 'Refresh'}
+                  </button>
+                  <button className="delete-btn" onClick={() => handleDelete(p.id)}>
+                    Delete
+                  </button>
+                </div>
               </div>
-              <div className="playlist-item-actions">
-                <button
-                  className="refresh-btn"
-                  disabled={refreshingId === p.id}
-                  onClick={() => handleRefresh(p.id)}
-                >
-                  {refreshingId === p.id ? '...' : 'Refresh'}
-                </button>
-                <button className="delete-btn" onClick={() => handleDelete(p.id)}>
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         <div className="playlist-add-actions">
           <button id="add-playlist-btn" onClick={handleAddPlaylist}>Add Playlist</button>
@@ -251,6 +264,23 @@ export default function SettingsView({
               onClick={() => handleThemeChange('dark')}
             >
               Dark
+            </button>
+          </div>
+        </div>
+        <div className="theme-setting">
+          <span>Auto refresh on startup</span>
+          <div className="view-toggle">
+            <button
+              className={`toggle-btn${autoRefresh ? ' active' : ''}`}
+              onClick={() => handleAutoRefreshChange(true)}
+            >
+              On
+            </button>
+            <button
+              className={`toggle-btn${!autoRefresh ? ' active' : ''}`}
+              onClick={() => handleAutoRefreshChange(false)}
+            >
+              Off
             </button>
           </div>
         </div>

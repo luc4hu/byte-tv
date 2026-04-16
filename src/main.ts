@@ -431,6 +431,16 @@ const createWindow = () => {
     }
   });
 
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.key === 'F12' && input.type === 'keyDown') {
+      if (mainWindow.webContents.isDevToolsOpened()) {
+        mainWindow.webContents.closeDevTools();
+      } else {
+        mainWindow.webContents.openDevTools();
+      }
+    }
+  });
+
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
@@ -438,9 +448,6 @@ const createWindow = () => {
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
-
-  // Open the DevTools.
-  mainWindow.webContents.openDevTools();
 };
 
 app.on('ready', () => {
@@ -455,6 +462,7 @@ app.on('ready', () => {
 
   createWindow();
   console.log(`[startup] createWindow done in ${Date.now() - t0}ms`);
+
 });
 
 app.on('window-all-closed', () => {
