@@ -71,17 +71,28 @@ export default function App() {
     init();
   }, [loadChannels]);
 
-  // "/" to focus search
+  // "/" to focus search, Tab to cycle views
   useEffect(() => {
+    const views: ViewMode[] = ['channels', 'categories', 'history', 'favourites'];
     const handler = (e: KeyboardEvent) => {
-      if (e.key === '/' && document.activeElement !== searchInputRef.current) {
+      const active = document.activeElement;
+      const inInput = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+      if (e.key === '/' && active !== searchInputRef.current) {
         e.preventDefault();
         searchInputRef.current?.focus();
+      } else if (e.key === 'Tab' && !inInput && !settingsOpen) {
+        e.preventDefault();
+        setViewMode(prev => {
+          const idx = views.indexOf(prev);
+          return views[(idx + 1) % views.length];
+        });
+        setDrillCategory(null);
+        setSearchQuery('');
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, []);
+  }, [settingsOpen]);
 
   const handleToggleFavourite = useCallback(async (streamUrl: string) => {
     const { isFavourite } = await window.electronAPI.toggleFavourite(streamUrl);
@@ -96,13 +107,15 @@ export default function App() {
     });
   }, []);
 
-  const handlePlayChannel = useCallback((streamUrl: string) => {
-    window.electronAPI.playChannel(streamUrl);
-    setHistoryUrls(prev => {
-      const next = prev.filter(u => u !== streamUrl);
-      next.unshift(streamUrl);
-      return next;
-    });
+  const handlePlayChannel = useCallback((streamUrl: string, skipHistory = false) => {
+    window.electronAPI.playChannel(streamUrl, skipHistory);
+    if (!skipHistory) {
+      setHistoryUrls(prev => {
+        const next = prev.filter(u => u !== streamUrl);
+        next.unshift(streamUrl);
+        return next;
+      });
+    }
   }, []);
 
   const handleViewChange = (mode: ViewMode) => {

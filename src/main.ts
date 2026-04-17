@@ -363,12 +363,14 @@ function registerIPC() {
     ).all(query);
   });
 
-  ipcMain.handle('channels:play', (_event, url: string) => {
-    db.prepare(`
-      INSERT INTO history (stream_url, last_played)
-      VALUES (?, ?)
-      ON CONFLICT(stream_url) DO UPDATE SET last_played = excluded.last_played
-    `).run(url, Date.now());
+  ipcMain.handle('channels:play', (_event, url: string, skipHistory = false) => {
+    if (!skipHistory) {
+      db.prepare(`
+        INSERT INTO history (stream_url, last_played)
+        VALUES (?, ?)
+        ON CONFLICT(stream_url) DO UPDATE SET last_played = excluded.last_played
+      `).run(url, Date.now());
+    }
 
     const flagsStr = (db.prepare('SELECT value FROM settings WHERE key = ?').get('mpv_flags') as { value: string } | undefined)?.value ?? '';
     const flags = flagsStr.trim() ? flagsStr.trim().split(/\s+/) : [];

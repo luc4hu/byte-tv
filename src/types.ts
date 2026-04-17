@@ -34,7 +34,7 @@ declare global {
       refreshPlaylist: (id: number) => Promise<{ count: number }>;
       getChannels: () => Promise<Channel[]>;
       searchChannels: (query: string) => Promise<Channel[]>;
-      playChannel: (url: string) => Promise<void>;
+      playChannel: (url: string, skipHistory?: boolean) => Promise<void>;
       getHistory: () => Promise<string[]>;
       getFavourites: () => Promise<string[]>;
       toggleFavourite: (streamUrl: string) => Promise<{ isFavourite: boolean }>;

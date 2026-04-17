@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Channels
   getChannels: () => ipcRenderer.invoke('channels:getAll'),
   searchChannels: (query: string) => ipcRenderer.invoke('channels:search', query),
-  playChannel: (url: string) => ipcRenderer.invoke('channels:play', url),
+  playChannel: (url: string, skipHistory?: boolean) => ipcRenderer.invoke('channels:play', url, skipHistory),
 
   // History
   getHistory: () => ipcRenderer.invoke('history:getAll'),

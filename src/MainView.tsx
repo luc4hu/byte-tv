@@ -18,7 +18,7 @@ interface MainViewProps {
   drillCategory: string | null;
   setDrillCategory: (cat: string | null) => void;
   onToggleFavourite: (streamUrl: string) => void;
-  onPlayChannel: (url: string) => void;
+  onPlayChannel: (url: string, skipHistory?: boolean) => void;
   onDebugText: (text: string) => void;
 }
 
@@ -165,9 +165,9 @@ export default function MainView({
     if (card?.dataset.url) {
       gridRef.current?.querySelector('.channel-card.loading')?.classList.remove('loading');
       card.classList.add('loading');
-      onPlayChannel(card.dataset.url);
+      onPlayChannel(card.dataset.url, viewMode === 'history');
     }
-  }, [setDrillCategory, onPlayChannel]);
+  }, [setDrillCategory, onPlayChannel, viewMode]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
