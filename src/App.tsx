@@ -94,6 +94,18 @@ export default function App() {
     return () => document.removeEventListener('keydown', handler);
   }, [settingsOpen]);
 
+  useEffect(() => {
+    if (drillCategory) {
+      setSearchQuery('');
+    }
+  }, [drillCategory]);
+
+  useEffect(() => {
+    if (drillCategory) {
+      setSearchQuery('');
+    }
+  }, [drillCategory]);
+
   const handleToggleFavourite = useCallback(async (streamUrl: string) => {
     const { isFavourite } = await window.electronAPI.toggleFavourite(streamUrl);
     setFavouriteUrls(prev => {
