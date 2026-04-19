@@ -20,6 +20,7 @@ export default function SettingsView({
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlValue, setUrlValue] = useState('');
   const [urlLoading, setUrlLoading] = useState(false);
+  const [playlistName, setPlaylistName] = useState('');
   const [refreshingId, setRefreshingId] = useState<number | null>(null);
   const [showXtreamInput, setShowXtreamInput] = useState(false);
   const [xtreamServer, setXtreamServer] = useState('');
@@ -49,23 +50,19 @@ export default function SettingsView({
     loadSettings();
   }, [loadSettings]);
 
-  const handleAddPlaylist = async () => {
-    const result = await window.electronAPI.addPlaylist();
-    if (!result.canceled) {
-      await onReloadChannels();
-      loadSettings();
-    }
-  };
+  
 
   const handleAddUrl = async () => {
     const url = urlValue.trim();
-    if (!url) return;
+    const name = playlistName.trim();
+    if (!url || !name) return;
     setUrlLoading(true);
     try {
-      const result = await window.electronAPI.addPlaylistFromURL(url);
+      const result = await window.electronAPI.addPlaylistFromURL(name, url);
       if (!result.canceled) {
         setShowUrlInput(false);
         setUrlValue('');
+        setPlaylistName('');
         await onReloadChannels();
         loadSettings();
       }
@@ -79,17 +76,19 @@ export default function SettingsView({
     const server = xtreamServer.trim();
     const user = xtreamUsername.trim();
     const pass = xtreamPassword.trim();
-    if (!server || !user || !pass) return;
+    const name = playlistName.trim();
+    if (!server || !user || !pass || !name) return;
 
     setXtreamLoading(true);
     setXtreamError('');
     try {
-      const result = await window.electronAPI.addXtreamPlaylist(server, user, pass);
+      const result = await window.electronAPI.addXtreamPlaylist(name, server, user, pass);
       if (!result.canceled) {
         setShowXtreamInput(false);
         setXtreamServer('');
         setXtreamUsername('');
         setXtreamPassword('');
+        setPlaylistName('');
         await onReloadChannels();
         loadSettings();
       }
@@ -175,19 +174,25 @@ export default function SettingsView({
           })}
         </div>
         <div className="playlist-add-actions">
-          <button id="add-playlist-btn" onClick={handleAddPlaylist}>Add Playlist</button>
-          <button id="add-url-btn" onClick={() => { setShowUrlInput(true); setShowXtreamInput(false); setUrlValue(''); }}>Add URL</button>
-          <button id="add-xtream-btn" onClick={() => { setShowXtreamInput(true); setShowUrlInput(false); setXtreamError(''); }}>Add Xtream</button>
+          <button id="add-url-btn" onClick={() => { setShowUrlInput(true); setShowXtreamInput(false); setUrlValue(''); setPlaylistName(''); }}>Add URL</button>
+          <button id="add-xtream-btn" onClick={() => { setShowXtreamInput(true); setShowUrlInput(false); setXtreamError(''); setPlaylistName(''); }}>Add Xtream</button>
         </div>
         {showUrlInput && (
           <div className="url-input-row">
+            <input
+              id="playlist-name-input"
+              type="text"
+              placeholder="Playlist name"
+              value={playlistName}
+              onChange={e => setPlaylistName(e.target.value)}
+              autoFocus
+            />
             <input
               id="url-input"
               type="url"
               placeholder="https://example.com/playlist.m3u"
               value={urlValue}
               onChange={e => setUrlValue(e.target.value)}
-              autoFocus
             />
             <button
               id="url-confirm-btn"
@@ -202,11 +207,17 @@ export default function SettingsView({
         {showXtreamInput && (
           <div className="xtream-input-form">
             <input
+              type="text"
+              placeholder="Playlist name"
+              value={playlistName}
+              onChange={e => setPlaylistName(e.target.value)}
+              autoFocus
+            />
+            <input
               type="url"
               placeholder="http://server:port"
               value={xtreamServer}
               onChange={e => setXtreamServer(e.target.value)}
-              autoFocus
             />
             <input
               type="text"

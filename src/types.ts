@@ -5,6 +5,7 @@ export interface Channel {
   group_title: string;
   stream_url: string;
   playlist_id: number;
+  playlist_name: string;
 }
 
 export interface Category {
@@ -26,9 +27,8 @@ export type ViewMode = 'channels' | 'categories' | 'history' | 'favourites';
 declare global {
   interface Window {
     electronAPI: {
-      addPlaylist: () => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
-      addPlaylistFromURL: (url: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
-      addXtreamPlaylist: (serverUrl: string, username: string, password: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
+      addPlaylistFromURL: (name: string, url: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
+      addXtreamPlaylist: (name: string, serverUrl: string, username: string, password: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
       getPlaylists: () => Promise<Playlist[]>;
       deletePlaylist: (id: number) => Promise<void>;
       refreshPlaylist: (id: number) => Promise<{ count: number }>;

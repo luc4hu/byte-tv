@@ -310,6 +310,14 @@ main {
   letter-spacing: -0.01em;
 }
 
+.channel-playlist {
+  font-size: 11px;
+  color: var(--text-sub);
+  position: absolute;
+  bottom: 4px;
+  right: 6px;
+}
+
 .category-card {
   display: flex;
   align-items: center;

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, session } from 'electron';
+import { app, BrowserWindow, ipcMain, net, session } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -158,48 +158,7 @@ function initDB() {
 
 function registerIPC() {
   // Playlist management
-  ipcMain.handle('playlists:add', async () => {
-    const result = await dialog.showOpenDialog({
-      properties: ['openFile'],
-      filters: [{ name: 'M3U Playlist', extensions: ['m3u', 'm3u8'] }],
-    });
-    if (result.canceled || result.filePaths.length === 0) {
-      return { canceled: true };
-    }
-
-    const t0 = Date.now();
-    const filePath = result.filePaths[0];
-    const playlistName = path.basename(filePath, path.extname(filePath));
-    const content = fs.readFileSync(filePath, 'utf-8');
-    console.log(`[import:file] read file in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
-
-    const t1 = Date.now();
-    const channels = parseM3U(content);
-    console.log(`[import:file] parsed ${channels.length} channels in ${Date.now() - t1}ms`);
-
-    const t2 = Date.now();
-    db.exec('BEGIN');
-    try {
-      db.prepare('INSERT INTO playlists (name, path) VALUES (?, ?)').run(playlistName, filePath);
-      const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
-
-      const insert = db.prepare(
-        'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
-      );
-      for (const ch of channels) {
-        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
-      }
-      db.exec('COMMIT');
-      console.log(`[import:file] inserted ${channels.length} rows in ${Date.now() - t2}ms`);
-      console.log(`[import:file] total: ${Date.now() - t0}ms`);
-      return { canceled: false, playlistId, count: channels.length };
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw e;
-    }
-  });
-
-  ipcMain.handle('playlists:addFromURL', async (_event, url: string) => {
+  ipcMain.handle('playlists:addFromURL', async (_event, name: string, url: string) => {
     const t0 = Date.now();
     const response = await net.fetch(url);
     if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.status}`);
@@ -210,19 +169,10 @@ function registerIPC() {
     const channels = parseM3U(content);
     console.log(`[import:url] parsed ${channels.length} channels in ${Date.now() - t1}ms`);
 
-    let playlistName: string;
-    try {
-      const parsed = new URL(url);
-      const base = path.basename(parsed.pathname, path.extname(parsed.pathname));
-      playlistName = base && base !== '/' ? base : parsed.hostname;
-    } catch {
-      playlistName = url;
-    }
-
     const t2 = Date.now();
     db.exec('BEGIN');
     try {
-      db.prepare('INSERT INTO playlists (name, path) VALUES (?, ?)').run(playlistName, url);
+      db.prepare('INSERT INTO playlists (name, path) VALUES (?, ?)').run(name, url);
       const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
 
       const insert = db.prepare(
@@ -241,26 +191,19 @@ function registerIPC() {
     }
   });
 
-  ipcMain.handle('playlists:addXtream', async (_event, serverUrl: string, username: string, password: string) => {
+  ipcMain.handle('playlists:addXtream', async (_event, name: string, serverUrl: string, username: string, password: string) => {
     const t0 = Date.now();
     const channels = await fetchXtreamChannels(serverUrl, username, password);
     console.log(`[import:xtream] fetched ${channels.length} channels in ${Date.now() - t0}ms`);
 
     const normalizedUrl = serverUrl.replace(/\/+$/, '');
 
-    let playlistName: string;
-    try {
-      playlistName = new URL(normalizedUrl).hostname;
-    } catch {
-      playlistName = normalizedUrl;
-    }
-
     const t1 = Date.now();
     db.exec('BEGIN');
     try {
       db.prepare(
         "INSERT INTO playlists (name, path, type, xtream_username, xtream_password) VALUES (?, ?, 'xtream', ?, ?)"
-      ).run(playlistName, normalizedUrl, username, password);
+      ).run(name, normalizedUrl, username, password);
       const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
 
       const insert = db.prepare(
@@ -354,13 +297,22 @@ function registerIPC() {
 
   // Channels
   ipcMain.handle('channels:getAll', () => {
-    return db.prepare('SELECT * FROM channels ORDER BY id ASC').all();
+    return db.prepare(`
+      SELECT c.*, p.name as playlist_name
+      FROM channels c
+      LEFT JOIN playlists p ON c.playlist_id = p.id
+      ORDER BY c.id ASC
+    `).all();
   });
 
   ipcMain.handle('channels:search', (_event, query: string) => {
-    return db.prepare(
-      "SELECT * FROM channels WHERE name LIKE '%' || ? || '%' ORDER BY id ASC"
-    ).all(query);
+    return db.prepare(`
+      SELECT c.*, p.name as playlist_name
+      FROM channels c
+      LEFT JOIN playlists p ON c.playlist_id = p.id
+      WHERE c.name LIKE '%' || ? || '%'
+      ORDER BY c.id ASC
+    `).all(query);
   });
 
   ipcMain.handle('channels:play', (_event, url: string, skipHistory = false) => {

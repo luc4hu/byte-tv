@@ -211,7 +211,7 @@ export default function MainView({
           : (items as Channel[]).map((ch, i) => {
               const name = displayName(ch);
               return (
-                <div key={`${ch.id}-${i}`} className="channel-card" data-url={ch.stream_url}>
+                <div key={`${ch.id}-${i}`} className="channel-card" data-url={ch.stream_url} title={name}>
                   {favouriteUrls.has(ch.stream_url) && <span className="favourite-star">&#9733;</span>}
                   <div className="channel-logo">
                     <img
@@ -226,6 +226,7 @@ export default function MainView({
                     <span className="logo-fallback">{name.charAt(0)}</span>
                   </div>
                   <div className="channel-name">{name}</div>
+                  {ch.playlist_name && <div className="channel-playlist">{ch.playlist_name}</div>}
                 </div>
               );
             })
