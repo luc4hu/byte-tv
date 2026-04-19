@@ -16,7 +16,7 @@ export default function SettingsView({
 }: SettingsViewProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [mpvFlags, setMpvFlags] = useState('');
-  const [cacheSize, setCacheSize] = useState(0);
+  
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlValue, setUrlValue] = useState('');
   const [urlLoading, setUrlLoading] = useState(false);
@@ -28,21 +28,16 @@ export default function SettingsView({
   const [xtreamPassword, setXtreamPassword] = useState('');
   const [xtreamLoading, setXtreamLoading] = useState(false);
   const [xtreamError, setXtreamError] = useState('');
-  const [currentTheme, setCurrentTheme] = useState<'light' | 'dark'>(
-    () => (document.documentElement.getAttribute('data-theme') as 'light' | 'dark') || 'light'
-  );
   const [autoRefresh, setAutoRefresh] = useState(false);
 
   const loadSettings = useCallback(async () => {
-    const [pl, flags, cache, arSetting] = await Promise.all([
+    const [pl, flags, arSetting] = await Promise.all([
       window.electronAPI.getPlaylists(),
       window.electronAPI.getSetting('mpv_flags'),
-      window.electronAPI.getCacheSize(),
       window.electronAPI.getSetting('auto_refresh'),
     ]);
     setPlaylists(pl);
     setMpvFlags(flags || '');
-    setCacheSize(cache);
     setAutoRefresh(arSetting === '1');
   }, []);
 
@@ -116,12 +111,6 @@ export default function SettingsView({
     loadSettings();
   };
 
-  const handleThemeChange = (theme: 'light' | 'dark') => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
-    setCurrentTheme(theme);
-  };
-
   const handleAutoRefreshChange = (value: boolean) => {
     setAutoRefresh(value);
     window.electronAPI.setSetting('auto_refresh', value ? '1' : '0');
@@ -131,13 +120,6 @@ export default function SettingsView({
     setStripSuperscript(value);
     window.electronAPI.setSetting('strip_superscript', value ? '1' : '0');
   };
-
-  const handleClearCache = async () => {
-    const newSize = await window.electronAPI.clearCache();
-    setCacheSize(newSize);
-  };
-
-  const cacheMB = (cacheSize / 1024 / 1024).toFixed(2);
 
   return (
     <div id="settings-page" style={{ display: 'block' }}>
@@ -262,23 +244,6 @@ export default function SettingsView({
       <div className="settings-section">
         <h2>Appearance</h2>
         <div className="theme-setting">
-          <span>Theme</span>
-          <div className="view-toggle">
-            <button
-              className={`toggle-btn${currentTheme === 'light' ? ' active' : ''}`}
-              onClick={() => handleThemeChange('light')}
-            >
-              Light
-            </button>
-            <button
-              className={`toggle-btn${currentTheme === 'dark' ? ' active' : ''}`}
-              onClick={() => handleThemeChange('dark')}
-            >
-              Dark
-            </button>
-          </div>
-        </div>
-        <div className="theme-setting">
           <span>Auto refresh on startup</span>
           <div className="view-toggle">
             <button
@@ -314,13 +279,6 @@ export default function SettingsView({
         </div>
       </div>
 
-      <div className="settings-section">
-        <h2>Cache</h2>
-        <div className="cache-setting">
-          <span>Browser cache: {cacheMB} MB</span>
-          <button id="settings-clear-cache" onClick={handleClearCache}>Clear</button>
-        </div>
       </div>
-    </div>
   );
 }

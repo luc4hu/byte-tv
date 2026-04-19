@@ -24,7 +24,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSetting: (key: string) => ipcRenderer.invoke('settings:get', key),
   setSetting: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
 
-  // Cache
-  getCacheSize: () => ipcRenderer.invoke('cache:getSize'),
-  clearCache: () => ipcRenderer.invoke('cache:clear'),
-});
+  });

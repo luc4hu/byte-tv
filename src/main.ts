@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, net, session } from 'electron';
+import { app, BrowserWindow, ipcMain, net } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,9 +8,6 @@ import started from 'electron-squirrel-startup';
 if (started) {
   app.quit();
 }
-
-// Set a limit of 200MB for the disk cache (in bytes)
-app.commandLine.appendSwitch('disk-cache-size', '209715200');
 
 interface Channel {
   name: string;
@@ -355,16 +352,7 @@ function registerIPC() {
     }
   });
 
-  // Cache
-  ipcMain.handle('cache:getSize', async () => {
-    return await session.defaultSession.getCacheSize();
-  });
-
-  ipcMain.handle('cache:clear', async () => {
-    await session.defaultSession.clearCache();
-    return await session.defaultSession.getCacheSize();
-  });
-}
+  }
 
 const createWindow = () => {
   const mainWindow = new BrowserWindow({

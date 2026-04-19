@@ -1,28 +1,6 @@
 @import "tailwindcss";
 
 :root {
-  --bg-app: #f8f8f8;
-  --bg-toolbar: #fff;
-  --bg-card: #fff;
-  --bg-hover: #f4f4f4;
-  --bg-active: #2d2d2d;
-  --bg-active-hover: #404040;
-  --bg-badge: hsl(0 0% 96%);
-  --bg-logo-fallback: #aaa;
-  --text-main: #111;
-  --text-muted: #444;
-  --text-icon: #666;
-  --text-on-active: #fff;
-  --border-color: #e5e5e5;
-  --border-color-light: hsl(0 0% 89.8%);
-  --border-hover: hsl(0 0% 79.8%);
-  --border-focus: hsl(0 0% 72%);
-  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-md: 0 2px 8px 0 rgb(0 0 0 / 0.06);
-  --shadow-lg: 0 4px 12px 0 rgb(0 0 0 / 0.08);
-}
-
-[data-theme="dark"] {
   --bg-app: #121212;
   --bg-toolbar: #1e1e1e;
   --bg-card: #1e1e1e;
@@ -642,29 +620,11 @@ main {
   box-shadow: var(--shadow-md);
 }
 
-.theme-setting,
-.cache-setting {
+.theme-setting {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 10px 0;
   font-size: 13px;
   color: var(--text-main);
-}
-
-#settings-clear-cache {
-  padding: 4px 10px;
-  font-size: 12px;
-  font-family: inherit;
-  border-radius: 6px;
-  cursor: pointer;
-  border: 1px solid var(--border-color);
-  background: var(--bg-toolbar);
-  color: var(--text-muted);
-  transition: background 0.15s, border-color 0.15s;
-}
-
-#settings-clear-cache:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-hover);
 }

@@ -4,13 +4,7 @@ import MainView from './MainView';
 import SettingsView from './SettingsView';
 
 function initTheme() {
-  const saved = localStorage.getItem('theme') as 'light' | 'dark' | null;
-  if (saved) {
-    document.documentElement.setAttribute('data-theme', saved);
-  } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    document.documentElement.setAttribute('data-theme', 'dark');
-    localStorage.setItem('theme', 'dark');
-  }
+  document.documentElement.setAttribute('data-theme', 'dark');
 }
 
 export default function App() {
