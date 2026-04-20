@@ -1,7 +1,7 @@
 {
   "name": "byte-tv",
   "productName": "byte-tv",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Desktop IPTV channel browser and player",
   "main": ".vite/build/main.js",
   "private": true,
