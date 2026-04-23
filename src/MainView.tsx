@@ -94,6 +94,10 @@ export default function MainView({
         if (!favouriteUrls.has(ch.stream_url) || seen.has(ch.stream_url)) return false;
         seen.add(ch.stream_url);
         return true;
+      }).sort((a, b) => {
+        const byPlaylist = (a.playlist_name || '').localeCompare(b.playlist_name || '');
+        if (byPlaylist !== 0) return byPlaylist;
+        return a.name.localeCompare(b.name);
       });
       if (tokens.length === 0) {
         channels = favChannels;

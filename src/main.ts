@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, net } from 'electron';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { createConnection } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -104,6 +105,59 @@ async function fetchXtreamChannels(
 }
 
 let db: DatabaseSync;
+let mpvChild: ChildProcess | null = null;
+// mpv uses Unix domain sockets on Linux/macOS, named pipes on Windows.
+// Node's net.createConnection needs the \\\\.\\pipe\\ prefix on Windows.
+const mpvSocketPath = () =>
+  process.platform === 'win32'
+    ? '\\\\.\\pipe\\byte-tv-mpv'
+    : path.join(app.getPath('userData'), 'mpv-socket');
+
+function mpvCommand(args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection(mpvSocketPath());
+    let buf = '';
+    let resolved = false;
+    const done = (result: boolean) => {
+      if (resolved) return;
+      resolved = true;
+      socket.destroy();
+      resolve(result);
+    };
+    socket.on('connect', () => {
+      const msg = JSON.stringify({ command: args, request_id: 1 }) + '\n';
+      socket.write(msg);
+    });
+    socket.on('data', (data) => {
+      buf += data.toString();
+      // Process complete lines
+      let nlIdx: number;
+      while ((nlIdx = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, nlIdx).trim();
+        buf = buf.slice(nlIdx + 1);
+        if (!line) continue;
+        try {
+          const parsed = JSON.parse(line) as { request_id?: number; error?: string };
+          if (parsed.request_id === 1) {
+            done(parsed.error === 'success');
+            return;
+          }
+        } catch {
+          // ignore non-JSON (mpv events)
+        }
+      }
+    });
+    socket.on('error', () => done(false));
+    socket.setTimeout(2000, () => done(false));
+  });
+}
+
+async function stopMpv() {
+  if (mpvChild && !mpvChild.killed) {
+    try { mpvChild.kill(); } catch { /* ignore */ }
+  }
+  mpvChild = null;
+}
 
 function initDB() {
   const dbPath = path.join(app.getPath('userData'), 'channels.db');
@@ -312,7 +366,7 @@ function registerIPC() {
     `).all(query);
   });
 
-  ipcMain.handle('channels:play', (_event, url: string, skipHistory = false) => {
+  ipcMain.handle('channels:play', async (_event, url: string, skipHistory = false) => {
     if (!skipHistory) {
       db.prepare(`
         INSERT INTO history (stream_url, last_played)
@@ -323,10 +377,20 @@ function registerIPC() {
 
     const flagsStr = (db.prepare('SELECT value FROM settings WHERE key = ?').get('mpv_flags') as { value: string } | undefined)?.value ?? '';
     const flags = flagsStr.trim() ? flagsStr.trim().split(/\s+/) : [];
-    const args = [...flags, url];
+
+    // Try to replace the stream in the running mpv instance via IPC
+    const replaced = await mpvCommand(['loadfile', url, 'replace']);
+    if (replaced) {
+      console.log('[mpv] replaced stream via IPC');
+      return;
+    }
+
+    // mpv not running or IPC failed — spawn a new instance
+    await stopMpv();
+    const args = [...flags, '--input-ipc-server=' + mpvSocketPath(), url];
     console.log('mpv', args.join(' '));
-    const child = spawn('mpv', args, { detached: true, stdio: 'ignore' });
-    child.unref();
+    mpvChild = spawn('mpv', args, { detached: true, stdio: 'ignore' });
+    mpvChild.unref();
   });
 
   // History
@@ -416,5 +480,13 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
+  }
+});
+
+app.on('before-quit', async () => {
+  // Try graceful IPC shutdown first, then fall back to kill
+  const sent = await mpvCommand(['quit']).catch(() => false);
+  if (!sent) {
+    await stopMpv();
   }
 });
