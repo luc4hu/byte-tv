@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import type { Playlist } from './types';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import type { Playlist, RefreshProgress } from './types';
 
 interface SettingsViewProps {
   onReloadChannels: () => Promise<void>;
@@ -22,6 +22,8 @@ export default function SettingsView({
   const [urlLoading, setUrlLoading] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
   const [refreshingId, setRefreshingId] = useState<number | null>(null);
+  const [refreshProgress, setRefreshProgress] = useState<RefreshProgress | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
   const [showXtreamInput, setShowXtreamInput] = useState(false);
   const [xtreamServer, setXtreamServer] = useState('');
   const [xtreamUsername, setXtreamUsername] = useState('');
@@ -95,13 +97,21 @@ export default function SettingsView({
 
   const handleRefresh = async (id: number) => {
     setRefreshingId(id);
+    setRefreshProgress({ phase: 'downloading' });
+    const cleanup = window.electronAPI.onRefreshProgress((progress) => {
+      setRefreshProgress(progress);
+    });
+    cleanupRef.current = cleanup;
     try {
       await window.electronAPI.refreshPlaylist(id);
       await onReloadChannels();
     } catch {
       // handled
     }
+    cleanup();
+    cleanupRef.current = null;
     setRefreshingId(null);
+    setRefreshProgress(null);
     loadSettings();
   };
 
@@ -131,6 +141,7 @@ export default function SettingsView({
           )}
           {playlists.map(p => {
             const isRefreshing = refreshingId === p.id || autoRefreshingIds.has(p.id);
+            const isActive = refreshingId === p.id && refreshProgress;
             return (
               <div key={p.id} className="playlist-item" data-id={p.id}>
                 <div className="playlist-item-info">
@@ -138,6 +149,32 @@ export default function SettingsView({
                   <span className="playlist-item-meta">
                     {p.channel_count} channels{p.type === 'xtream' ? ' \u00B7 Xtream' : p.path ? ` \u00B7 ${p.path}` : ''}
                   </span>
+                  {isActive && (
+                    <div className="refresh-progress">
+                      <div className="refresh-progress-bar">
+                        <div
+                          className="refresh-progress-fill"
+                          style={{
+                            width: refreshProgress.phase === 'downloading' && refreshProgress.percent != null
+                              ? `${refreshProgress.percent}%`
+                              : undefined,
+                            animation: refreshProgress.phase !== 'downloading' || refreshProgress.percent == null
+                              ? 'progress-indeterminate 1.5s ease-in-out infinite'
+                              : undefined,
+                          }}
+                        />
+                      </div>
+                      <span className="refresh-progress-label">
+                        {refreshProgress.phase === 'downloading' && (
+                          refreshProgress.percent != null
+                            ? `Downloading ${refreshProgress.percent}%`
+                            : 'Downloading...'
+                        )}
+                        {refreshProgress.phase === 'parsing' && 'Parsing...'}
+                        {refreshProgress.phase === 'inserting' && 'Inserting...'}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <div className="playlist-item-actions">
                   <button

@@ -620,6 +620,53 @@ main {
   box-shadow: var(--shadow-md);
 }
 
+/* Refresh progress bar */
+.refresh-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.refresh-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-hover);
+  border-radius: 2px;
+  overflow: hidden;
+  min-width: 80px;
+}
+
+.refresh-progress-fill {
+  height: 100%;
+  background: var(--bg-active);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+@keyframes progress-indeterminate {
+  0% {
+    width: 5%;
+    margin-left: 0;
+  }
+  50% {
+    width: 40%;
+    margin-left: 30%;
+  }
+  100% {
+    width: 5%;
+    margin-left: 95%;
+  }
+}
+
+.refresh-progress-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .theme-setting {
   display: flex;
   align-items: center;

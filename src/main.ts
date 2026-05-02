@@ -66,6 +66,32 @@ function parseM3U(content: string): Channel[] {
   return channels;
 }
 
+async function readResponseBody(
+  response: Awaited<ReturnType<typeof net.fetch>>,
+  onProgress: (percent: number) => void,
+): Promise<string> {
+  const contentLength = Number(response.headers.get('content-length')) || 0;
+  const body = response.body;
+  if (!body) return response.text();
+
+  const reader = body.getReader();
+  const chunks: string[] = [];
+  let received = 0;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = new TextDecoder().decode(value, { stream: true });
+    chunks.push(chunk);
+    received += value.byteLength;
+    if (contentLength > 0) {
+      onProgress(Math.round((received / contentLength) * 100));
+    }
+  }
+
+  return chunks.join('');
+}
+
 async function fetchXtreamChannels(
   serverUrl: string,
   username: string,
@@ -288,12 +314,19 @@ function registerIPC() {
     db.prepare('DELETE FROM playlists WHERE id = ?').run(playlistId);
   });
 
-  ipcMain.handle('playlists:refresh', async (_event, playlistId: number) => {
+  ipcMain.handle('playlists:refresh', async (event, playlistId: number) => {
     const t0 = Date.now();
     const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(playlistId) as
       { id: number; name: string; path: string | null; type: string; xtream_username: string | null; xtream_password: string | null } | undefined;
     if (!playlist) throw new Error('Playlist not found');
     if (!playlist.path) throw new Error('No path for playlist');
+
+    const sender = event.sender;
+    const report = (phase: string, percent?: number) => {
+      if (!sender.isDestroyed()) {
+        sender.send('playlists:refreshProgress', { phase, percent });
+      }
+    };
 
     let channels: Channel[];
     if (playlist.type === 'xtream') {
@@ -303,19 +336,22 @@ function registerIPC() {
       const isURL = /^https?:\/\//i.test(playlist.path);
       let content: string;
       if (isURL) {
+        report('downloading');
         const response = await net.fetch(playlist.path);
         if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.status}`);
-        content = await response.text();
+        content = await readResponseBody(response, (pct) => report('downloading', pct));
         console.log(`[refresh:${playlist.name}] fetched URL in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
       } else {
         content = fs.readFileSync(playlist.path, 'utf-8');
         console.log(`[refresh:${playlist.name}] read file in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
       }
+      report('parsing');
       const t1 = Date.now();
       channels = parseM3U(content);
       console.log(`[refresh:${playlist.name}] parsed ${channels.length} channels in ${Date.now() - t1}ms`);
     }
 
+    report('inserting');
     const t2 = Date.now();
     db.exec('BEGIN');
     try {

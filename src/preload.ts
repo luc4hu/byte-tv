@@ -7,6 +7,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPlaylists: () => ipcRenderer.invoke('playlists:getAll'),
   deletePlaylist: (id: number) => ipcRenderer.invoke('playlists:delete', id),
   refreshPlaylist: (id: number) => ipcRenderer.invoke('playlists:refresh', id),
+  onRefreshProgress: (callback: (progress: { phase: string; percent?: number }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: { phase: string; percent?: number }) => callback(progress);
+    ipcRenderer.on('playlists:refreshProgress', handler);
+    return () => { ipcRenderer.removeListener('playlists:refreshProgress', handler); };
+  },
 
   // Channels
   getChannels: () => ipcRenderer.invoke('channels:getAll'),
