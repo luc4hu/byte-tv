@@ -16,6 +16,7 @@ export default function SettingsView({
 }: SettingsViewProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [mpvFlags, setMpvFlags] = useState('');
+  const [appVersion, setAppVersion] = useState('');
   
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlValue, setUrlValue] = useState('');
@@ -40,14 +41,16 @@ export default function SettingsView({
   const [autoRefresh, setAutoRefresh] = useState(false);
 
   const loadSettings = useCallback(async () => {
-    const [pl, flags, arSetting] = await Promise.all([
+    const [pl, flags, arSetting, version] = await Promise.all([
       window.electronAPI.getPlaylists(),
       window.electronAPI.getSetting('mpv_flags'),
       window.electronAPI.getSetting('auto_refresh'),
+      window.electronAPI.getAppVersion(),
     ]);
     setPlaylists(pl);
     setMpvFlags(flags || '');
     setAutoRefresh(arSetting === '1');
+    setAppVersion(version);
   }, []);
 
   useEffect(() => {
@@ -423,6 +426,7 @@ export default function SettingsView({
         </div>
       </div>
 
-      </div>
+      {appVersion && <div className="settings-version">byte-tv v{appVersion}</div>}
+    </div>
   );
 }

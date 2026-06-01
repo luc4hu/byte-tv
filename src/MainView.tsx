@@ -1,7 +1,7 @@
-import { useMemo, useEffect, useRef, useCallback } from 'react';
+import { useMemo, useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
 import type { Channel, Category, ViewMode } from './types';
 
-const RENDER_LIMIT = 200;
+const RENDER_BATCH_SIZE = 200;
 const SUPERSCRIPT_RE = /[\u00AA\u00B2\u00B3\u00B9\u00BA\u02B0-\u02FF\u1D2C-\u1D6A\u1D78\u1D9B-\u1DBF\u2070-\u207F]/g;
 
 function stripSuperscripts(s: string): string {
@@ -36,6 +36,8 @@ export default function MainView({
   onDebugText,
 }: MainViewProps) {
   const gridRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const [visibleCount, setVisibleCount] = useState(RENDER_BATCH_SIZE);
 
   const { allCategories, channelNamesLower, categoryNamesLower } = useMemo(() => {
     const channelNamesLower = allChannels.map(ch => ch.name.toLowerCase());
@@ -146,15 +148,40 @@ export default function MainView({
     const elapsed = performance.now() - t0;
     if (categories) {
       const totalCount = categories.length;
-      return { items: categories.slice(0, RENDER_LIMIT), totalCount, elapsed, renderMode: 'categories' as const };
+      return { items: categories, totalCount, elapsed, renderMode: 'categories' as const };
     }
     const totalCount = channels!.length;
-    return { items: channels!.slice(0, RENDER_LIMIT), totalCount, elapsed, renderMode: 'channels' as const };
+    return { items: channels!, totalCount, elapsed, renderMode: 'channels' as const };
   }, [allChannels, allCategories, channelNamesLower, categoryNamesLower, favouriteUrls, historyUrls, viewMode, drillCategory, searchQuery]);
 
+  useLayoutEffect(() => {
+    setVisibleCount(RENDER_BATCH_SIZE);
+  }, [viewMode, drillCategory, searchQuery, items]);
+
+  const visibleItems = items.slice(0, visibleCount);
+  const hasMore = visibleCount < totalCount;
+
   useEffect(() => {
-    onDebugText(`${totalCount} results in ${elapsed.toFixed(1)}ms`);
-  }, [totalCount, elapsed, onDebugText]);
+    const sentinel = sentinelRef.current;
+    const scrollRoot = gridRef.current?.closest('main') ?? null;
+    if (!sentinel || !hasMore) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some(entry => entry.isIntersecting)) return;
+      setVisibleCount(prev => Math.min(prev + RENDER_BATCH_SIZE, totalCount));
+    }, {
+      root: scrollRoot,
+      rootMargin: '1200px 0px',
+    });
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, totalCount]);
+
+  useEffect(() => {
+    const renderedCount = Math.min(visibleCount, totalCount);
+    onDebugText(`${renderedCount} / ${totalCount} results in ${elapsed.toFixed(1)}ms`);
+  }, [visibleCount, totalCount, elapsed, onDebugText]);
 
   const handleGridClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -183,7 +210,7 @@ export default function MainView({
   const displayName = (ch: Channel) =>
     stripSuperscript && viewMode === 'favourites' ? stripSuperscripts(ch.name) : ch.name;
 
-  if (items.length === 0) {
+  if (visibleItems.length === 0) {
     return (
       <div id="empty-state">
         <p>No channels loaded. Open Settings to add a playlist.</p>
@@ -206,13 +233,13 @@ export default function MainView({
         onContextMenu={handleContextMenu}
       >
         {renderMode === 'categories'
-          ? (items as Category[]).map(cat => (
+          ? (visibleItems as Category[]).map(cat => (
               <div key={cat.name} className="category-card" data-category={cat.name}>
                 <span className="category-name">{cat.name}</span>
                 <span className="category-count">{cat.count} ch.</span>
               </div>
             ))
-          : (items as Channel[]).map((ch, i) => {
+          : (visibleItems as Channel[]).map((ch, i) => {
               const name = displayName(ch);
               return (
                 <div key={`${ch.id}-${i}`} className="channel-card" data-url={ch.stream_url} title={name}>
@@ -236,6 +263,7 @@ export default function MainView({
             })
         }
       </div>
+      {hasMore && <div ref={sentinelRef} className="scroll-sentinel" aria-hidden="true" />}
     </>
   );
 }

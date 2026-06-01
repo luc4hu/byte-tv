@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // App
+  getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
+
   // Playlists
   addPlaylistFromURL: (name: string, url: string) => ipcRenderer.invoke('playlists:addFromURL', name, url),
   addXtreamPlaylist: (name: string, serverUrl: string, username: string, password: string) => ipcRenderer.invoke('playlists:addXtream', name, serverUrl, username, password),

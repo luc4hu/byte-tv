@@ -277,6 +277,9 @@ function initDB() {
 }
 
 function registerIPC() {
+  // App
+  ipcMain.handle('app:getVersion', () => app.getVersion());
+
   // Playlist management
   ipcMain.handle('playlists:addFromURL', async (_event, name: string, url: string) => {
     const t0 = Date.now();

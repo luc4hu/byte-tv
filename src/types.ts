@@ -40,6 +40,7 @@ export interface RefreshProgress {
 declare global {
   interface Window {
     electronAPI: {
+      getAppVersion: () => Promise<string>;
       addPlaylistFromURL: (name: string, url: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
       addXtreamPlaylist: (name: string, serverUrl: string, username: string, password: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
       getXtreamPlaylistDetails: (id: number) => Promise<XtreamPlaylistDetails>;
