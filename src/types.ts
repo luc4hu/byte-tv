@@ -22,6 +22,14 @@ export interface Playlist {
   channel_count: number;
 }
 
+export interface XtreamPlaylistDetails {
+  id: number;
+  name: string;
+  serverUrl: string;
+  username: string;
+  password: string;
+}
+
 export type ViewMode = 'channels' | 'categories' | 'history' | 'favourites';
 
 export interface RefreshProgress {
@@ -34,6 +42,8 @@ declare global {
     electronAPI: {
       addPlaylistFromURL: (name: string, url: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
       addXtreamPlaylist: (name: string, serverUrl: string, username: string, password: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
+      getXtreamPlaylistDetails: (id: number) => Promise<XtreamPlaylistDetails>;
+      updateXtreamPlaylist: (id: number, name: string, serverUrl: string, username: string, password: string) => Promise<{ count: number }>;
       getPlaylists: () => Promise<Playlist[]>;
       deletePlaylist: (id: number) => Promise<void>;
       refreshPlaylist: (id: number) => Promise<{ count: number }>;

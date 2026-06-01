@@ -34,6 +34,15 @@ interface XtreamStream {
   category_id: string;
 }
 
+interface PlaylistRow {
+  id: number;
+  name: string;
+  path: string | null;
+  type: string;
+  xtream_username: string | null;
+  xtream_password: string | null;
+}
+
 function parseM3U(content: string): Channel[] {
   const lines = content.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   const channels: Channel[] = [];
@@ -128,6 +137,40 @@ async function fetchXtreamChannels(
     groupTitle: categoryMap.get(String(s.category_id)) || '',
     streamUrl: `${base}/live/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${s.stream_id}.ts`,
   }));
+}
+
+function xtreamStreamIdFromUrl(streamUrl: string): string | null {
+  const match = streamUrl.match(/\/live\/[^/]+\/[^/]+\/(\d+)\.ts(?:[?#].*)?$/);
+  return match?.[1] ?? null;
+}
+
+function remapStreamUrlReferences(oldByStreamId: Map<string, string>, channels: Channel[]) {
+  for (const ch of channels) {
+    const streamId = xtreamStreamIdFromUrl(ch.streamUrl);
+    if (!streamId) continue;
+
+    const oldUrl = oldByStreamId.get(streamId);
+    if (!oldUrl || oldUrl === ch.streamUrl) continue;
+
+    const history = db.prepare('SELECT last_played FROM history WHERE stream_url = ?').get(oldUrl) as
+      { last_played: number } | undefined;
+
+    db.prepare('INSERT OR IGNORE INTO favourites (stream_url) SELECT ? WHERE EXISTS (SELECT 1 FROM favourites WHERE stream_url = ?)').run(ch.streamUrl, oldUrl);
+    db.prepare('DELETE FROM favourites WHERE stream_url = ?').run(oldUrl);
+
+    if (history) {
+      db.prepare(`
+        INSERT INTO history (stream_url, last_played)
+        VALUES (?, ?)
+        ON CONFLICT(stream_url) DO UPDATE SET last_played =
+          CASE
+            WHEN history.last_played > excluded.last_played THEN history.last_played
+            ELSE excluded.last_played
+          END
+      `).run(ch.streamUrl, history.last_played);
+      db.prepare('DELETE FROM history WHERE stream_url = ?').run(oldUrl);
+    }
+  }
 }
 
 let db: DatabaseSync;
@@ -299,6 +342,63 @@ function registerIPC() {
     }
   });
 
+  ipcMain.handle('playlists:getXtreamDetails', (_event, playlistId: number) => {
+    const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(playlistId) as PlaylistRow | undefined;
+    if (!playlist) throw new Error('Playlist not found');
+    if (playlist.type !== 'xtream') throw new Error('Playlist is not an Xtream playlist');
+
+    return {
+      id: playlist.id,
+      name: playlist.name,
+      serverUrl: playlist.path ?? '',
+      username: playlist.xtream_username ?? '',
+      password: playlist.xtream_password ?? '',
+    };
+  });
+
+  ipcMain.handle('playlists:updateXtream', async (_event, playlistId: number, name: string, serverUrl: string, username: string, password: string) => {
+    const t0 = Date.now();
+    const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(playlistId) as PlaylistRow | undefined;
+    if (!playlist) throw new Error('Playlist not found');
+    if (playlist.type !== 'xtream') throw new Error('Playlist is not an Xtream playlist');
+
+    const channels = await fetchXtreamChannels(serverUrl, username, password);
+    console.log(`[update:xtream:${playlist.name}] fetched ${channels.length} channels in ${Date.now() - t0}ms`);
+
+    const normalizedUrl = serverUrl.replace(/\/+$/, '');
+    const oldRows = db.prepare('SELECT stream_url FROM channels WHERE playlist_id = ?').all(playlistId) as { stream_url: string }[];
+    const oldByStreamId = new Map<string, string>();
+    for (const row of oldRows) {
+      const streamId = xtreamStreamIdFromUrl(row.stream_url);
+      if (streamId) oldByStreamId.set(streamId, row.stream_url);
+    }
+
+    const t1 = Date.now();
+    db.exec('BEGIN');
+    try {
+      db.prepare(`
+        UPDATE playlists
+        SET name = ?, path = ?, xtream_username = ?, xtream_password = ?
+        WHERE id = ?
+      `).run(name, normalizedUrl, username, password, playlistId);
+      db.prepare('DELETE FROM channels WHERE playlist_id = ?').run(playlistId);
+
+      const insert = db.prepare(
+        'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
+      );
+      for (const ch of channels) {
+        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
+      }
+      remapStreamUrlReferences(oldByStreamId, channels);
+      db.exec('COMMIT');
+      console.log(`[update:xtream:${name}] updated ${channels.length} rows in ${Date.now() - t1}ms`);
+      return { count: channels.length };
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  });
+
   ipcMain.handle('playlists:getAll', () => {
     return db.prepare(`
       SELECT p.id, p.name, p.path, p.type, p.added_date,
@@ -316,8 +416,7 @@ function registerIPC() {
 
   ipcMain.handle('playlists:refresh', async (event, playlistId: number) => {
     const t0 = Date.now();
-    const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(playlistId) as
-      { id: number; name: string; path: string | null; type: string; xtream_username: string | null; xtream_password: string | null } | undefined;
+    const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(playlistId) as PlaylistRow | undefined;
     if (!playlist) throw new Error('Playlist not found');
     if (!playlist.path) throw new Error('No path for playlist');
 

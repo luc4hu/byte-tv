@@ -30,6 +30,13 @@ export default function SettingsView({
   const [xtreamPassword, setXtreamPassword] = useState('');
   const [xtreamLoading, setXtreamLoading] = useState(false);
   const [xtreamError, setXtreamError] = useState('');
+  const [editingXtreamId, setEditingXtreamId] = useState<number | null>(null);
+  const [editXtreamName, setEditXtreamName] = useState('');
+  const [editXtreamServer, setEditXtreamServer] = useState('');
+  const [editXtreamUsername, setEditXtreamUsername] = useState('');
+  const [editXtreamPassword, setEditXtreamPassword] = useState('');
+  const [editXtreamLoading, setEditXtreamLoading] = useState(false);
+  const [editXtreamError, setEditXtreamError] = useState('');
   const [autoRefresh, setAutoRefresh] = useState(false);
 
   const loadSettings = useCallback(async () => {
@@ -93,6 +100,56 @@ export default function SettingsView({
       setXtreamError(err instanceof Error ? err.message : 'Failed to connect');
     }
     setXtreamLoading(false);
+  };
+
+  const closeEditXtream = () => {
+    setEditingXtreamId(null);
+    setEditXtreamName('');
+    setEditXtreamServer('');
+    setEditXtreamUsername('');
+    setEditXtreamPassword('');
+    setEditXtreamError('');
+  };
+
+  const handleEditXtream = async (id: number) => {
+    setShowUrlInput(false);
+    setShowXtreamInput(false);
+    setXtreamError('');
+    setEditingXtreamId(id);
+    setEditXtreamLoading(true);
+    setEditXtreamError('');
+    try {
+      const details = await window.electronAPI.getXtreamPlaylistDetails(id);
+      setEditXtreamName(details.name);
+      setEditXtreamServer(details.serverUrl);
+      setEditXtreamUsername(details.username);
+      setEditXtreamPassword(details.password);
+    } catch (err: unknown) {
+      setEditXtreamError(err instanceof Error ? err.message : 'Failed to load playlist');
+    }
+    setEditXtreamLoading(false);
+  };
+
+  const handleSaveXtream = async () => {
+    if (editingXtreamId == null) return;
+
+    const name = editXtreamName.trim();
+    const server = editXtreamServer.trim();
+    const user = editXtreamUsername.trim();
+    const pass = editXtreamPassword.trim();
+    if (!name || !server || !user || !pass) return;
+
+    setEditXtreamLoading(true);
+    setEditXtreamError('');
+    try {
+      await window.electronAPI.updateXtreamPlaylist(editingXtreamId, name, server, user, pass);
+      closeEditXtream();
+      await onReloadChannels();
+      loadSettings();
+    } catch (err: unknown) {
+      setEditXtreamError(err instanceof Error ? err.message : 'Failed to save playlist');
+    }
+    setEditXtreamLoading(false);
   };
 
   const handleRefresh = async (id: number) => {
@@ -184,6 +241,15 @@ export default function SettingsView({
                   >
                     {isRefreshing ? '...' : 'Refresh'}
                   </button>
+                  {p.type === 'xtream' && (
+                    <button
+                      className="edit-btn"
+                      disabled={isRefreshing || editXtreamLoading}
+                      onClick={() => handleEditXtream(p.id)}
+                    >
+                      Edit
+                    </button>
+                  )}
                   <button className="delete-btn" onClick={() => handleDelete(p.id)}>
                     Delete
                   </button>
@@ -193,8 +259,8 @@ export default function SettingsView({
           })}
         </div>
         <div className="playlist-add-actions">
-          <button id="add-url-btn" onClick={() => { setShowUrlInput(true); setShowXtreamInput(false); setUrlValue(''); setPlaylistName(''); }}>Add URL</button>
-          <button id="add-xtream-btn" onClick={() => { setShowXtreamInput(true); setShowUrlInput(false); setXtreamError(''); setPlaylistName(''); }}>Add Xtream</button>
+          <button id="add-url-btn" onClick={() => { setShowUrlInput(true); setShowXtreamInput(false); closeEditXtream(); setUrlValue(''); setPlaylistName(''); }}>Add URL</button>
+          <button id="add-xtream-btn" onClick={() => { setShowXtreamInput(true); setShowUrlInput(false); closeEditXtream(); setXtreamError(''); setPlaylistName(''); }}>Add Xtream</button>
         </div>
         {showUrlInput && (
           <div className="url-input-row">
@@ -261,6 +327,47 @@ export default function SettingsView({
                 {xtreamLoading ? 'Connecting...' : 'Connect'}
               </button>
               <button onClick={() => setShowXtreamInput(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
+        {editingXtreamId != null && (
+          <div className="xtream-input-form">
+            <input
+              type="text"
+              placeholder="Playlist name"
+              value={editXtreamName}
+              onChange={e => setEditXtreamName(e.target.value)}
+              autoFocus
+            />
+            <input
+              type="url"
+              placeholder="http://server:port"
+              value={editXtreamServer}
+              onChange={e => setEditXtreamServer(e.target.value)}
+            />
+            <input
+              type="text"
+              placeholder="Username"
+              value={editXtreamUsername}
+              onChange={e => setEditXtreamUsername(e.target.value)}
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={editXtreamPassword}
+              onChange={e => setEditXtreamPassword(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleSaveXtream(); }}
+            />
+            {editXtreamError && <span className="xtream-error">{editXtreamError}</span>}
+            <div className="xtream-input-actions">
+              <button
+                className="xtream-confirm-btn"
+                disabled={editXtreamLoading}
+                onClick={handleSaveXtream}
+              >
+                {editXtreamLoading ? 'Saving...' : 'Save'}
+              </button>
+              <button disabled={editXtreamLoading} onClick={closeEditXtream}>Cancel</button>
             </div>
           </div>
         )}
