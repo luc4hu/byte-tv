@@ -566,6 +566,8 @@ const createWindow = () => {
     },
   });
 
+  mainWindow.maximize();
+
   mainWindow.webContents.on('zoom-changed', (_event, direction) => {
     const current = mainWindow.webContents.getZoomFactor();
     if (direction === 'in') {
