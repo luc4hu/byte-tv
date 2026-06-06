@@ -21,21 +21,25 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const loadChannels = useCallback(async () => {
-    const t0 = performance.now();
-    const [channels, favUrls, histUrls, stripSetting] = await Promise.all([
-      window.electronAPI.getChannels(),
-      window.electronAPI.getFavourites(),
-      window.electronAPI.getHistory(),
-      window.electronAPI.getSetting('strip_superscript'),
-    ]);
-    console.log(`[renderer] getChannels + getFavourites + getHistory: ${performance.now() - t0}ms`);
+    try {
+      const t0 = performance.now();
+      const [channels, favUrls, histUrls, stripSetting] = await Promise.all([
+        window.electronAPI.getChannels(),
+        window.electronAPI.getFavourites(),
+        window.electronAPI.getHistory(),
+        window.electronAPI.getSetting('strip_superscript'),
+      ]);
+      console.log(`[renderer] getChannels + getFavourites + getHistory: ${performance.now() - t0}ms`);
 
-    setAllChannels(channels);
-    setFavouriteUrls(new Set(favUrls));
-    setHistoryUrls(histUrls);
-    setStripSuperscript(stripSetting === '1');
-    setDebugText(`${channels.length} channels loaded`);
-    console.log(`[renderer] total loadChannels: ${performance.now() - t0}ms`);
+      setAllChannels(channels);
+      setFavouriteUrls(new Set(favUrls));
+      setHistoryUrls(histUrls);
+      setStripSuperscript(stripSetting === '1');
+      setDebugText(`${channels.length} channels loaded`);
+      console.log(`[renderer] total loadChannels: ${performance.now() - t0}ms`);
+    } catch (e) {
+      window.electronAPI.logFromRenderer('error', `loadChannels: ${String(e)}`);
+    }
   }, []);
 
   useEffect(() => {
@@ -136,6 +140,8 @@ export default function App() {
     setSettingsOpen(prev => !prev);
   };
 
+
+
   const searchPlaceholder = drillCategory
     ? 'Search in category...'
     : viewMode === 'channels'
@@ -215,6 +221,7 @@ export default function App() {
           />
         )}
       </main>
+
     </>
   );
 }

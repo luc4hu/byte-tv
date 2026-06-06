@@ -32,6 +32,14 @@ export interface XtreamPlaylistDetails {
 
 export type ViewMode = 'channels' | 'categories' | 'history' | 'favourites';
 
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+export interface LogEntry {
+  ts: string;        // ISO with second resolution, e.g. "2026-06-06T14:23:45Z"
+  level: LogLevel;
+  message: string;   // single-line, newlines collapsed to '\n'
+}
+
 export interface RefreshProgress {
   phase: 'downloading' | 'parsing' | 'inserting';
   percent?: number; // 0-100, only during downloading phase when Content-Length is known
@@ -59,6 +67,10 @@ declare global {
       setSetting: (key: string, value: string) => Promise<void>;
       getCacheSize: () => Promise<number>;
       clearCache: () => Promise<number>;
+      getLogs: () => Promise<LogEntry[]>;
+      clearLogs: () => Promise<void>;
+      logFromRenderer: (level: LogLevel, message: string) => Promise<void>;
+      openLogsWindow: () => Promise<void>;
     };
   }
 }
