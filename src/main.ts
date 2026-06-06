@@ -454,8 +454,14 @@ function registerIPC() {
     if (!playlist.path) throw new Error('No path for playlist');
 
     const sender = event.sender;
+    let lastReport = 0;
     const report = (phase: string, percent?: number) => {
       if (!sender.isDestroyed()) {
+        // Throttle percentage updates to avoid flooding the renderer with IPC
+        // and causing cascading re-renders. Phase transitions always go through.
+        const now = Date.now();
+        if (percent != null && now - lastReport < 200) return;
+        lastReport = now;
         sender.send('playlists:refreshProgress', { phase, percent });
       }
     };

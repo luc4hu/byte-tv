@@ -58,7 +58,7 @@ const config: ForgeConfig = {
         },
         {
           name: 'logs_window',
-          config: 'vite.renderer.config.ts',
+          config: 'vite.renderer.logs.config.ts',
         },
       ],
     }),

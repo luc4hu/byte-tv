@@ -218,25 +218,9 @@ export default function SettingsView({
                   </span>
                   {isActive && (
                     <div className="refresh-progress">
-                      <div className="refresh-progress-bar">
-                        <div
-                          className="refresh-progress-fill"
-                          style={{
-                            width: refreshProgress.phase === 'downloading' && refreshProgress.percent != null
-                              ? `${refreshProgress.percent}%`
-                              : undefined,
-                            animation: refreshProgress.phase !== 'downloading' || refreshProgress.percent == null
-                              ? 'progress-indeterminate 1.5s ease-in-out infinite'
-                              : undefined,
-                          }}
-                        />
-                      </div>
+                      <span className="refresh-spinner" />
                       <span className="refresh-progress-label">
-                        {refreshProgress.phase === 'downloading' && (
-                          refreshProgress.percent != null
-                            ? `Downloading ${refreshProgress.percent}%`
-                            : 'Downloading...'
-                        )}
+                        {refreshProgress.phase === 'downloading' && 'Downloading...'}
                         {refreshProgress.phase === 'parsing' && 'Parsing...'}
                         {refreshProgress.phase === 'inserting' && 'Inserting...'}
                       </span>
