@@ -34,4 +34,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSetting: (key: string) => ipcRenderer.invoke('settings:get', key),
   setSetting: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
 
+  // Logging
+  getLogs: () => ipcRenderer.invoke('logs:get'),
+  clearLogs: () => ipcRenderer.invoke('logs:clear'),
+  logFromRenderer: (level: string, message: string) => ipcRenderer.invoke('logs:fromRenderer', level, message),
+  openLogsWindow: () => ipcRenderer.invoke('logs:openWindow'),
+
   });

@@ -686,3 +686,29 @@ main {
   font-size: 13px;
   color: var(--text-main);
 }
+
+/* Diagnostics row */
+.settings-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-row button {
+  padding: 8px 18px;
+  background: var(--bg-active);
+  color: var(--text-on-active);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  height: 36px;
+  transition: background 0.15s;
+}
+
+.settings-row button:hover {
+  background: var(--bg-active-hover);
+}
+

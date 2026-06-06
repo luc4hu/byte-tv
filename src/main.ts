@@ -1,14 +1,32 @@
-import { app, BrowserWindow, ipcMain, net } from 'electron';
+import { app, BrowserWindow, ipcMain, net, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import started from 'electron-squirrel-startup';
+import {
+  logInfo,
+  logWarn,
+  logError,
+  logDebug,
+  initLogger,
+  getLogs,
+  clearLogs,
+  subscribeLogs,
+} from './logger';
 
 if (started) {
   app.quit();
 }
+
+// Global error handlers — must be registered early
+process.on('uncaughtException', (err) => {
+  try { logError('[uncaughtException]', err); } catch { /* last resort */ }
+});
+process.on('unhandledRejection', (reason) => {
+  try { logError('[unhandledRejection]', String(reason)); } catch { /* last resort */ }
+});
 
 interface Channel {
   name: string;
@@ -175,6 +193,9 @@ function remapStreamUrlReferences(oldByStreamId: Map<string, string>, channels: 
 
 let db: DatabaseSync;
 let mpvChild: ChildProcess | null = null;
+let mainWindow: BrowserWindow | null = null;
+let logsWindow: BrowserWindow | null = null;
+
 // mpv uses Unix domain sockets on Linux/macOS, named pipes on Windows.
 // Node's net.createConnection needs the \\\\.\\pipe\\ prefix on Windows.
 const mpvSocketPath = () =>
@@ -212,18 +233,24 @@ function mpvCommand(args: string[]): Promise<boolean> {
             return;
           }
         } catch {
-          // ignore non-JSON (mpv events)
+          logDebug('[mpv:event]', line);
         }
       }
     });
-    socket.on('error', () => done(false));
-    socket.setTimeout(2000, () => done(false));
+    socket.on('error', (e) => {
+      logDebug('[mpv:socket]', e);
+      done(false);
+    });
+    socket.setTimeout(2000, () => {
+      logWarn('[mpv:socket] timeout');
+      done(false);
+    });
   });
 }
 
 async function stopMpv() {
   if (mpvChild && !mpvChild.killed) {
-    try { mpvChild.kill(); } catch { /* ignore */ }
+    try { mpvChild.kill(); } catch (e) { logWarn('[mpv:kill]', e); }
   }
   mpvChild = null;
 }
@@ -244,9 +271,9 @@ function initDB() {
     )
   `);
   // Migrations for existing installs
-  try { db.exec("ALTER TABLE playlists ADD COLUMN type TEXT NOT NULL DEFAULT 'm3u'"); } catch { /* already exists */ }
-  try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_username TEXT'); } catch { /* already exists */ }
-  try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_password TEXT'); } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE playlists ADD COLUMN type TEXT NOT NULL DEFAULT 'm3u'"); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
+  try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_username TEXT'); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
+  try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_password TEXT'); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
   db.exec(`
     CREATE TABLE IF NOT EXISTS channels (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -286,11 +313,11 @@ function registerIPC() {
     const response = await net.fetch(url);
     if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.status}`);
     const content = await response.text();
-    console.log(`[import:url] fetched in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
+    logInfo(`[import:url] fetched in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
 
     const t1 = Date.now();
     const channels = parseM3U(content);
-    console.log(`[import:url] parsed ${channels.length} channels in ${Date.now() - t1}ms`);
+    logInfo(`[import:url] parsed ${channels.length} channels in ${Date.now() - t1}ms`);
 
     const t2 = Date.now();
     db.exec('BEGIN');
@@ -305,11 +332,12 @@ function registerIPC() {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
       db.exec('COMMIT');
-      console.log(`[import:url] inserted ${channels.length} rows in ${Date.now() - t2}ms`);
-      console.log(`[import:url] total: ${Date.now() - t0}ms`);
+      logInfo(`[import:url] inserted ${channels.length} rows in ${Date.now() - t2}ms`);
+      logInfo(`[import:url] total: ${Date.now() - t0}ms`);
       return { canceled: false, playlistId, count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
+      logError('[import:url]', e);
       throw e;
     }
   });
@@ -317,7 +345,7 @@ function registerIPC() {
   ipcMain.handle('playlists:addXtream', async (_event, name: string, serverUrl: string, username: string, password: string) => {
     const t0 = Date.now();
     const channels = await fetchXtreamChannels(serverUrl, username, password);
-    console.log(`[import:xtream] fetched ${channels.length} channels in ${Date.now() - t0}ms`);
+    logInfo(`[import:xtream] fetched ${channels.length} channels in ${Date.now() - t0}ms`);
 
     const normalizedUrl = serverUrl.replace(/\/+$/, '');
 
@@ -336,11 +364,12 @@ function registerIPC() {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
       db.exec('COMMIT');
-      console.log(`[import:xtream] inserted ${channels.length} rows in ${Date.now() - t1}ms`);
-      console.log(`[import:xtream] total: ${Date.now() - t0}ms`);
+      logInfo(`[import:xtream] inserted ${channels.length} rows in ${Date.now() - t1}ms`);
+      logInfo(`[import:xtream] total: ${Date.now() - t0}ms`);
       return { canceled: false, playlistId, count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
+      logError('[import:xtream]', e);
       throw e;
     }
   });
@@ -366,7 +395,7 @@ function registerIPC() {
     if (playlist.type !== 'xtream') throw new Error('Playlist is not an Xtream playlist');
 
     const channels = await fetchXtreamChannels(serverUrl, username, password);
-    console.log(`[update:xtream:${playlist.name}] fetched ${channels.length} channels in ${Date.now() - t0}ms`);
+    logInfo(`[update:xtream:${playlist.name}] fetched ${channels.length} channels in ${Date.now() - t0}ms`);
 
     const normalizedUrl = serverUrl.replace(/\/+$/, '');
     const oldRows = db.prepare('SELECT stream_url FROM channels WHERE playlist_id = ?').all(playlistId) as { stream_url: string }[];
@@ -394,10 +423,11 @@ function registerIPC() {
       }
       remapStreamUrlReferences(oldByStreamId, channels);
       db.exec('COMMIT');
-      console.log(`[update:xtream:${name}] updated ${channels.length} rows in ${Date.now() - t1}ms`);
+      logInfo(`[update:xtream:${name}] updated ${channels.length} rows in ${Date.now() - t1}ms`);
       return { count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
+      logError('[update:xtream]', e);
       throw e;
     }
   });
@@ -433,7 +463,7 @@ function registerIPC() {
     let channels: Channel[];
     if (playlist.type === 'xtream') {
       channels = await fetchXtreamChannels(playlist.path, playlist.xtream_username!, playlist.xtream_password!);
-      console.log(`[refresh:${playlist.name}] fetched ${channels.length} xtream channels in ${Date.now() - t0}ms`);
+      logInfo(`[refresh:${playlist.name}] fetched ${channels.length} xtream channels in ${Date.now() - t0}ms`);
     } else {
       const isURL = /^https?:\/\//i.test(playlist.path);
       let content: string;
@@ -442,15 +472,15 @@ function registerIPC() {
         const response = await net.fetch(playlist.path);
         if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.status}`);
         content = await readResponseBody(response, (pct) => report('downloading', pct));
-        console.log(`[refresh:${playlist.name}] fetched URL in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
+        logInfo(`[refresh:${playlist.name}] fetched URL in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
       } else {
         content = fs.readFileSync(playlist.path, 'utf-8');
-        console.log(`[refresh:${playlist.name}] read file in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
+        logInfo(`[refresh:${playlist.name}] read file in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
       }
       report('parsing');
       const t1 = Date.now();
       channels = parseM3U(content);
-      console.log(`[refresh:${playlist.name}] parsed ${channels.length} channels in ${Date.now() - t1}ms`);
+      logInfo(`[refresh:${playlist.name}] parsed ${channels.length} channels in ${Date.now() - t1}ms`);
     }
 
     report('inserting');
@@ -465,11 +495,12 @@ function registerIPC() {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
       db.exec('COMMIT');
-      console.log(`[refresh:${playlist.name}] deleted + inserted ${channels.length} rows in ${Date.now() - t2}ms`);
-      console.log(`[refresh:${playlist.name}] total: ${Date.now() - t0}ms`);
+      logInfo(`[refresh:${playlist.name}] deleted + inserted ${channels.length} rows in ${Date.now() - t2}ms`);
+      logInfo(`[refresh:${playlist.name}] total: ${Date.now() - t0}ms`);
       return { count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
+      logError('[refresh]', e);
       throw e;
     }
   });
@@ -519,15 +550,28 @@ function registerIPC() {
     // Try to replace the stream in the running mpv instance via IPC
     const replaced = await mpvCommand(['loadfile', url, 'replace']);
     if (replaced) {
-      console.log('[mpv] replaced stream via IPC');
+      logInfo('[mpv] replaced stream via IPC');
       return;
     }
 
     // mpv not running or IPC failed — spawn a new instance
     await stopMpv();
     const args = [...flags, '--input-ipc-server=' + mpvSocketPath(), url];
-    console.log('mpv', args.join(' '));
-    mpvChild = spawn('mpv', args, { detached: true, stdio: 'ignore' });
+    logInfo('[mpv]', args.join(' '));
+    mpvChild = spawn('mpv', args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    mpvChild.stdout?.on('data', (d) => {
+      // mpv outputs playback status lines like "AV: 00:00:13 / 00:00:32 (41%)..."
+      // multiple times per second. Filter them out to avoid flooding the logs.
+      const lines = d.toString().split(/\r?\n|\r/).map((l: string) => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        if (!/^(AV:|\s*\(Paused\) AV:)/.test(line)) {
+          logInfo('[mpv:stdout]', line);
+        }
+      }
+    });
+    mpvChild.stderr?.on('data', (d) => logWarn('[mpv:stderr]', d.toString().trimEnd()));
+    mpvChild.on('error', (e) => logError('[mpv:spawn]', e.message));
+    mpvChild.on('exit', (code, signal) => logInfo('[mpv:exit]', `code=${code} signal=${signal ?? 'none'}`));
     mpvChild.unref();
   });
 
@@ -554,10 +598,22 @@ function registerIPC() {
     }
   });
 
-  }
+  // Logging
+  ipcMain.handle('logs:get', () => getLogs());
+  ipcMain.handle('logs:clear', () => clearLogs());
+  ipcMain.handle('logs:openFolder', () => {
+    shell.openPath(path.join(app.getPath('userData'), 'logs'));
+  });
+  ipcMain.handle('logs:fromRenderer', (_event, level: string, message: string) => {
+    if (level === 'warn') logWarn('[renderer]', message);
+    else if (level === 'error') logError('[renderer]', message);
+    else logInfo('[renderer]', message);
+  });
+  ipcMain.handle('logs:openWindow', () => { createLogsWindow(); });
+}
 
 const createWindow = () => {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     autoHideMenuBar: true,
@@ -594,24 +650,63 @@ const createWindow = () => {
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
+
+  // Subscribe to new log entries and forward them to all windows
+  subscribeLogs((entry) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('logs:entry', entry);
+    }
+    if (logsWindow && !logsWindow.isDestroyed()) {
+      logsWindow.webContents.send('logs:entry', entry);
+    }
+  });
 };
+
+function createLogsWindow() {
+  if (logsWindow && !logsWindow.isDestroyed()) {
+    logsWindow.focus();
+    return;
+  }
+
+  logsWindow = new BrowserWindow({
+    width: 900,
+    height: 600,
+    autoHideMenuBar: true,
+    title: 'byte-tv Logs',
+    webPreferences: {
+      preload: path.join(__dirname, 'logs-preload.js'),
+    },
+  });
+
+  logsWindow.on('closed', () => { logsWindow = null; });
+
+  if (LOGS_WINDOW_VITE_DEV_SERVER_URL) {
+    logsWindow.loadURL(`${LOGS_WINDOW_VITE_DEV_SERVER_URL}/logs-index.html`);
+  } else {
+    logsWindow.loadFile(
+      path.join(__dirname, `../renderer/${LOGS_WINDOW_VITE_NAME}/logs-index.html`),
+    );
+  }
+}
 
 app.on('ready', () => {
   const t0 = Date.now();
-  console.log('[startup] app ready');
+
+  initLogger(path.join(app.getPath('userData'), 'logs'));
+  logInfo('[startup] app ready');
 
   initDB();
-  console.log(`[startup] initDB done in ${Date.now() - t0}ms`);
+  logInfo(`[startup] initDB done in ${Date.now() - t0}ms`);
 
   registerIPC();
-  console.log(`[startup] registerIPC done in ${Date.now() - t0}ms`);
+  logInfo(`[startup] registerIPC done in ${Date.now() - t0}ms`);
 
   createWindow();
-  console.log(`[startup] createWindow done in ${Date.now() - t0}ms`);
-
+  logInfo(`[startup] createWindow done in ${Date.now() - t0}ms`);
 });
 
 app.on('window-all-closed', () => {
+  mainWindow = null;
   if (process.platform !== 'darwin') {
     app.quit();
   }

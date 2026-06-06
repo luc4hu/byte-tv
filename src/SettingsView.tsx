@@ -8,6 +8,10 @@ interface SettingsViewProps {
   autoRefreshingIds: Set<number>;
 }
 
+function logToMain(level: 'info' | 'warn' | 'error', ...args: unknown[]) {
+  window.electronAPI.logFromRenderer(level, args.map(String).join(' '));
+}
+
 export default function SettingsView({
   onReloadChannels,
   stripSuperscript,
@@ -73,8 +77,8 @@ export default function SettingsView({
         await onReloadChannels();
         loadSettings();
       }
-    } catch {
-      // error state handled by button text
+    } catch (e) {
+      logToMain('error', 'handleAddUrl:', String(e));
     }
     setUrlLoading(false);
   };
@@ -100,6 +104,7 @@ export default function SettingsView({
         loadSettings();
       }
     } catch (err: unknown) {
+      logToMain('error', 'handleAddXtream:', err instanceof Error ? err.message : String(err));
       setXtreamError(err instanceof Error ? err.message : 'Failed to connect');
     }
     setXtreamLoading(false);
@@ -128,6 +133,7 @@ export default function SettingsView({
       setEditXtreamUsername(details.username);
       setEditXtreamPassword(details.password);
     } catch (err: unknown) {
+      logToMain('error', 'handleEditXtream:', err instanceof Error ? err.message : String(err));
       setEditXtreamError(err instanceof Error ? err.message : 'Failed to load playlist');
     }
     setEditXtreamLoading(false);
@@ -150,6 +156,7 @@ export default function SettingsView({
       await onReloadChannels();
       loadSettings();
     } catch (err: unknown) {
+      logToMain('error', 'handleSaveXtream:', err instanceof Error ? err.message : String(err));
       setEditXtreamError(err instanceof Error ? err.message : 'Failed to save playlist');
     }
     setEditXtreamLoading(false);
@@ -165,8 +172,8 @@ export default function SettingsView({
     try {
       await window.electronAPI.refreshPlaylist(id);
       await onReloadChannels();
-    } catch {
-      // handled
+    } catch (e) {
+      logToMain('error', 'handleRefresh:', String(e));
     }
     cleanup();
     cleanupRef.current = null;
@@ -423,6 +430,13 @@ export default function SettingsView({
               Off
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <h2>Diagnostics</h2>
+        <div className="settings-row">
+          <button onClick={() => window.electronAPI.openLogsWindow()}>View Logs</button>
         </div>
       </div>
 
