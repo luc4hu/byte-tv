@@ -8,6 +8,14 @@ interface SettingsViewProps {
   autoRefreshingIds: Set<number>;
 }
 
+function formatExpiry(expDate: string | null | undefined): string | null {
+  if (!expDate) return null;
+  const exp = parseInt(expDate, 10);
+  if (!exp || exp === 0) return null;
+  const date = new Date(exp * 1000);
+  return date.toISOString().split('T')[0];
+}
+
 function logToMain(level: 'info' | 'warn' | 'error', ...args: unknown[]) {
   window.electronAPI.logFromRenderer(level, args.map(String).join(' '));
 }
@@ -214,7 +222,7 @@ export default function SettingsView({
                 <div className="playlist-item-info">
                   <span className="playlist-item-name">{p.name}</span>
                   <span className="playlist-item-meta">
-                    {p.channel_count} channels{p.type === 'xtream' ? ' \u00B7 Xtream' : p.path ? ` \u00B7 ${p.path}` : ''}
+                    {p.channel_count} channels{p.type === 'xtream' ? ` \u00B7 Xtream${formatExpiry(p.exp_date) ? ` \u00B7 ${formatExpiry(p.exp_date)}` : ''}` : p.path ? ` \u00B7 ${p.path}` : ''}
                   </span>
                   {isActive && (
                     <div className="refresh-progress">

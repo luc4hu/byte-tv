@@ -20,6 +20,17 @@ export interface Playlist {
   type: 'm3u' | 'xtream';
   added_date: string;
   channel_count: number;
+  exp_date?: string | null;
+}
+
+export interface XtreamUserInfo {
+  username: string;
+  status: string;
+  expDate: string;
+  isTrial: boolean;
+  activeCons: number;
+  createdAt: string;
+  maxConnections: number;
 }
 
 export interface XtreamPlaylistDetails {

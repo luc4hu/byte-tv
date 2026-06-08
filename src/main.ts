@@ -36,8 +36,29 @@ interface Channel {
 }
 
 interface XtreamAuthResponse {
-  user_info: { auth: number; status: string };
-  server_info: { url: string; port: string };
+  user_info: {
+    auth: number;
+    status: string;
+    exp_date: string;
+    is_trial: string;
+    active_cons: string;
+    created_at: string;
+    max_connections: string;
+    username: string;
+    password: string;
+    message: string;
+    allowed_output_formats: string[];
+  };
+  server_info: {
+    url: string;
+    port: string;
+    https_port: string;
+    server_protocol: string;
+    rtmp_port: string;
+    timezone: string;
+    timestamp_now: number;
+    time_now: string;
+  };
 }
 
 interface XtreamCategory {
@@ -59,6 +80,7 @@ interface PlaylistRow {
   type: string;
   xtream_username: string | null;
   xtream_password: string | null;
+  exp_date: string | null;
 }
 
 function parseM3U(content: string): Channel[] {
@@ -123,7 +145,7 @@ async function fetchXtreamChannels(
   serverUrl: string,
   username: string,
   password: string,
-): Promise<Channel[]> {
+): Promise<{ channels: Channel[]; expDate: string }> {
   const base = serverUrl.replace(/\/+$/, '');
   const apiUrl = `${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
 
@@ -134,6 +156,8 @@ async function fetchXtreamChannels(
   if (auth.user_info?.auth !== 1) {
     throw new Error('Xtream authentication failed: invalid credentials or account inactive');
   }
+
+  const expDate = auth.user_info?.exp_date ?? '';
 
   // Fetch live categories
   const catRes = await net.fetch(`${apiUrl}&action=get_live_categories`);
@@ -149,12 +173,15 @@ async function fetchXtreamChannels(
   if (!streamRes.ok) throw new Error(`Failed to fetch streams: ${streamRes.status}`);
   const streams = (await streamRes.json()) as XtreamStream[];
 
-  return streams.map((s) => ({
-    name: s.name,
-    logo: s.stream_icon || '',
-    groupTitle: categoryMap.get(String(s.category_id)) || '',
-    streamUrl: `${base}/live/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${s.stream_id}.ts`,
-  }));
+  return {
+    channels: streams.map((s) => ({
+      name: s.name,
+      logo: s.stream_icon || '',
+      groupTitle: categoryMap.get(String(s.category_id)) || '',
+      streamUrl: `${base}/live/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${s.stream_id}.ts`,
+    })),
+    expDate,
+  };
 }
 
 function xtreamStreamIdFromUrl(streamUrl: string): string | null {
@@ -274,6 +301,7 @@ function initDB() {
   try { db.exec("ALTER TABLE playlists ADD COLUMN type TEXT NOT NULL DEFAULT 'm3u'"); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
   try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_username TEXT'); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
   try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_password TEXT'); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
+  try { db.exec("ALTER TABLE playlists ADD COLUMN exp_date TEXT"); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
   db.exec(`
     CREATE TABLE IF NOT EXISTS channels (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -344,7 +372,7 @@ function registerIPC() {
 
   ipcMain.handle('playlists:addXtream', async (_event, name: string, serverUrl: string, username: string, password: string) => {
     const t0 = Date.now();
-    const channels = await fetchXtreamChannels(serverUrl, username, password);
+    const { channels, expDate } = await fetchXtreamChannels(serverUrl, username, password);
     logInfo(`[import:xtream] fetched ${channels.length} channels in ${Date.now() - t0}ms`);
 
     const normalizedUrl = serverUrl.replace(/\/+$/, '');
@@ -353,8 +381,8 @@ function registerIPC() {
     db.exec('BEGIN');
     try {
       db.prepare(
-        "INSERT INTO playlists (name, path, type, xtream_username, xtream_password) VALUES (?, ?, 'xtream', ?, ?)"
-      ).run(name, normalizedUrl, username, password);
+        "INSERT INTO playlists (name, path, type, xtream_username, xtream_password, exp_date) VALUES (?, ?, 'xtream', ?, ?, ?)"
+      ).run(name, normalizedUrl, username, password, expDate || null);
       const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
 
       const insert = db.prepare(
@@ -394,7 +422,7 @@ function registerIPC() {
     if (!playlist) throw new Error('Playlist not found');
     if (playlist.type !== 'xtream') throw new Error('Playlist is not an Xtream playlist');
 
-    const channels = await fetchXtreamChannels(serverUrl, username, password);
+    const { channels, expDate } = await fetchXtreamChannels(serverUrl, username, password);
     logInfo(`[update:xtream:${playlist.name}] fetched ${channels.length} channels in ${Date.now() - t0}ms`);
 
     const normalizedUrl = serverUrl.replace(/\/+$/, '');
@@ -410,9 +438,9 @@ function registerIPC() {
     try {
       db.prepare(`
         UPDATE playlists
-        SET name = ?, path = ?, xtream_username = ?, xtream_password = ?
+        SET name = ?, path = ?, xtream_username = ?, xtream_password = ?, exp_date = ?
         WHERE id = ?
-      `).run(name, normalizedUrl, username, password, playlistId);
+      `).run(name, normalizedUrl, username, password, expDate || null, playlistId);
       db.prepare('DELETE FROM channels WHERE playlist_id = ?').run(playlistId);
 
       const insert = db.prepare(
@@ -434,7 +462,7 @@ function registerIPC() {
 
   ipcMain.handle('playlists:getAll', () => {
     return db.prepare(`
-      SELECT p.id, p.name, p.path, p.type, p.added_date,
+      SELECT p.id, p.name, p.path, p.type, p.added_date, p.exp_date,
              COUNT(c.id) as channel_count
       FROM playlists p
       LEFT JOIN channels c ON c.playlist_id = p.id
@@ -467,8 +495,11 @@ function registerIPC() {
     };
 
     let channels: Channel[];
+    let expDate = '';
     if (playlist.type === 'xtream') {
-      channels = await fetchXtreamChannels(playlist.path, playlist.xtream_username!, playlist.xtream_password!);
+      const result = await fetchXtreamChannels(playlist.path, playlist.xtream_username!, playlist.xtream_password!);
+      channels = result.channels;
+      expDate = result.expDate;
       logInfo(`[refresh:${playlist.name}] fetched ${channels.length} xtream channels in ${Date.now() - t0}ms`);
     } else {
       const isURL = /^https?:\/\//i.test(playlist.path);
@@ -500,6 +531,7 @@ function registerIPC() {
       for (const ch of channels) {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
+      db.prepare('UPDATE playlists SET exp_date = ? WHERE id = ?').run(expDate || null, playlistId);
       db.exec('COMMIT');
       logInfo(`[refresh:${playlist.name}] deleted + inserted ${channels.length} rows in ${Date.now() - t2}ms`);
       logInfo(`[refresh:${playlist.name}] total: ${Date.now() - t0}ms`);
