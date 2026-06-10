@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import started from 'electron-squirrel-startup';
+import { runMigrations } from './migrations';
 import {
   logInfo,
   logWarn,
@@ -294,51 +295,10 @@ async function stopMpv() {
 function initDB() {
   const dbPath = path.join(app.getPath('userData'), 'channels.db');
   db = new DatabaseSync(dbPath);
+  // foreign_keys must be set outside a transaction, so it stays here rather than
+  // in a migration.
   db.exec('PRAGMA foreign_keys = ON');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS playlists (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      path TEXT,
-      type TEXT NOT NULL DEFAULT 'm3u',
-      xtream_username TEXT,
-      xtream_password TEXT,
-      added_date TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-  // Migrations for existing installs
-  try { db.exec("ALTER TABLE playlists ADD COLUMN type TEXT NOT NULL DEFAULT 'm3u'"); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
-  try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_username TEXT'); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
-  try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_password TEXT'); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
-  try { db.exec("ALTER TABLE playlists ADD COLUMN exp_date TEXT"); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
-  try { db.exec("ALTER TABLE playlists ADD COLUMN last_refreshed TEXT"); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS channels (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      logo TEXT,
-      group_title TEXT,
-      stream_url TEXT NOT NULL,
-      playlist_id INTEGER REFERENCES playlists(id) ON DELETE CASCADE
-    )
-  `);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS favourites (
-      stream_url TEXT PRIMARY KEY NOT NULL
-    )
-  `);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS history (
-      stream_url TEXT PRIMARY KEY NOT NULL,
-      last_played INTEGER NOT NULL
-    )
-  `);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY NOT NULL,
-      value TEXT NOT NULL DEFAULT ''
-    )
-  `);
+  runMigrations(db);
 }
 
 function registerIPC() {

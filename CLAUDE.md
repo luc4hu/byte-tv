@@ -40,11 +40,21 @@ Styling in `src/index.css` uses CSS custom properties (dark theme is hardcoded v
 ## Key Patterns
 
 - **IPC protocol**: Handlers registered in `registerIPC()` in main.ts, invoked through preload bridge methods. Channel names follow `domain:action` convention (e.g., `channels:getAll`, `favourites:toggle`).
-- **Database**: Five tables — `playlists`, `channels` (FK to playlists, ON DELETE CASCADE), `favourites` (stream_url PK), `history` (stream_url PK, last_played), `settings` (key/value). DB file lives in Electron's `userData` directory. Schema migrations are ad-hoc `ALTER TABLE` calls in `initDB()`.
+- **Database**: Five tables — `playlists`, `channels` (FK to playlists, ON DELETE CASCADE), `favourites` (stream_url PK), `history` (stream_url PK, last_played), `settings` (key/value). DB file (`channels.db`) lives in Electron's `userData` directory. Schema is defined and versioned via migrations (see below).
 - **Search**: Client-side multi-token AND matching against pre-built lowercase name arrays. Rendered in batches of 200 via IntersectionObserver infinite scroll.
 - **Favourites**: Right-click context menu toggles. Stored as stream_url set in both SQLite and renderer memory. On Xtream refresh, favourite/history URLs are remapped by stream id (`remapStreamUrlReferences`) so credential changes don't lose them.
 - **M3U parsing**: Extracts `tvg-logo`, `group-title` attributes and channel name from `#EXTINF:` lines.
 - **Playback**: Reuses a running mpv instance via `loadfile ... replace` over the IPC socket; spawns a new detached mpv otherwise. User-configurable flags come from the `mpv_flags` setting.
+
+## Database Migrations
+
+Schema lives in `src/migrations.ts` as an ordered `migrations` array and is versioned with SQLite's `PRAGMA user_version`. Index `i` in the array upgrades the DB from `user_version` `i` to `i + 1`.
+
+- `runMigrations(db)` — called from `initDB()` in `main.ts` — reads `user_version` and applies every not-yet-run migration in order, each in its own transaction, bumping `user_version` by one. A failed migration rolls back and leaves `user_version` untouched.
+- **Migration 1** is the consolidated baseline: `CREATE TABLE IF NOT EXISTS` for the five tables (the full canonical column set). On a database that already has the tables it's a no-op that simply stamps `user_version = 1`.
+- **Rules**: append new migrations only — never edit, reorder, or delete one that has shipped, since installed databases are already stamped past it. New schema changes (new tables, `ALTER TABLE`, indexes) go in a new array entry.
+- `initDB()` keeps `PRAGMA foreign_keys = ON` outside the migration runner (PRAGMA is a no-op inside a transaction).
+- Legacy local databases may carry unused EPG/FTS orphan tables from an abandoned experiment; current code ignores them — the code schema is authoritative.
 
 ## Build Configuration
 
