@@ -311,6 +311,7 @@ function initDB() {
   try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_username TEXT'); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
   try { db.exec('ALTER TABLE playlists ADD COLUMN xtream_password TEXT'); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
   try { db.exec("ALTER TABLE playlists ADD COLUMN exp_date TEXT"); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
+  try { db.exec("ALTER TABLE playlists ADD COLUMN last_refreshed TEXT"); } catch (e) { logWarn('[migration]', e instanceof Error ? e.message : String(e)); }
   db.exec(`
     CREATE TABLE IF NOT EXISTS channels (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -359,7 +360,7 @@ function registerIPC() {
     const t2 = Date.now();
     db.exec('BEGIN');
     try {
-      db.prepare('INSERT INTO playlists (name, path) VALUES (?, ?)').run(name, url);
+      db.prepare("INSERT INTO playlists (name, path, last_refreshed) VALUES (?, ?, datetime('now'))").run(name, url);
       const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
 
       const insert = db.prepare(
@@ -390,7 +391,7 @@ function registerIPC() {
     db.exec('BEGIN');
     try {
       db.prepare(
-        "INSERT INTO playlists (name, path, type, xtream_username, xtream_password, exp_date) VALUES (?, ?, 'xtream', ?, ?, ?)"
+        "INSERT INTO playlists (name, path, type, xtream_username, xtream_password, exp_date, last_refreshed) VALUES (?, ?, 'xtream', ?, ?, ?, datetime('now'))"
       ).run(name, normalizedUrl, username, password, expDate || null);
       const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
 
@@ -447,7 +448,7 @@ function registerIPC() {
     try {
       db.prepare(`
         UPDATE playlists
-        SET name = ?, path = ?, xtream_username = ?, xtream_password = ?, exp_date = ?
+        SET name = ?, path = ?, xtream_username = ?, xtream_password = ?, exp_date = ?, last_refreshed = datetime('now')
         WHERE id = ?
       `).run(name, normalizedUrl, username, password, expDate || null, playlistId);
       db.prepare('DELETE FROM channels WHERE playlist_id = ?').run(playlistId);
@@ -471,7 +472,7 @@ function registerIPC() {
 
   ipcMain.handle('playlists:getAll', () => {
     return db.prepare(`
-      SELECT p.id, p.name, p.path, p.type, p.added_date, p.exp_date,
+      SELECT p.id, p.name, p.path, p.type, p.added_date, p.exp_date, p.last_refreshed,
              COUNT(c.id) as channel_count
       FROM playlists p
       LEFT JOIN channels c ON c.playlist_id = p.id
@@ -541,7 +542,7 @@ function registerIPC() {
       for (const ch of channels) {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
-      db.prepare('UPDATE playlists SET exp_date = ? WHERE id = ?').run(expDate || null, playlistId);
+      db.prepare("UPDATE playlists SET exp_date = ?, last_refreshed = datetime('now') WHERE id = ?").run(expDate || null, playlistId);
       db.exec('COMMIT');
       logInfo(`[refresh:${playlist.name}] deleted + inserted ${channels.length} rows in ${Date.now() - t2}ms`);
       logInfo(`[refresh:${playlist.name}] total: ${Date.now() - t0}ms`);

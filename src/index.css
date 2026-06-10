@@ -434,8 +434,15 @@ main {
 }
 
 .playlist-item-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.playlist-item-meta span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

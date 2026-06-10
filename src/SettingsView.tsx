@@ -7,6 +7,16 @@ interface SettingsViewProps {
   setStripSuperscript: (value: boolean) => void;
 }
 
+function formatLastRefreshed(value: string | null | undefined): string | null {
+  if (!value) return null;
+  // SQLite datetime('now') stores UTC as "YYYY-MM-DD HH:MM:SS"
+  const date = new Date(value.replace(' ', 'T') + 'Z');
+  if (isNaN(date.getTime())) return null;
+  // ISO-style, but in the user's local timezone
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function formatExpiry(expDate: string | null | undefined): string | null {
   if (!expDate) return null;
   const exp = parseInt(expDate, 10);
@@ -210,13 +220,19 @@ export default function SettingsView({
           {playlists.map(p => {
             const isRefreshing = refreshingIds.has(p.id);
             const refreshProgress = isRefreshing ? progressById.get(p.id) : undefined;
+            const lastRefreshed = formatLastRefreshed(p.last_refreshed);
+            const expiry = p.type === 'xtream' ? formatExpiry(p.exp_date) : null;
             return (
               <div key={p.id} className="playlist-item" data-id={p.id}>
                 <div className="playlist-item-info">
                   <span className="playlist-item-name">{p.name}</span>
-                  <span className="playlist-item-meta">
-                    {p.channel_count} channels{p.type === 'xtream' ? ` \u00B7 Xtream${formatExpiry(p.exp_date) ? ` \u00B7 ${formatExpiry(p.exp_date)}` : ''}` : p.path ? ` \u00B7 ${p.path}` : ''}
-                  </span>
+                  <div className="playlist-item-meta">
+                    <span>{p.channel_count} channels</span>
+                    {p.type === 'xtream'
+                      ? <span>Xtream{expiry ? ` \u00B7 expires ${expiry}` : ''}</span>
+                      : p.path ? <span>{p.path}</span> : null}
+                    {lastRefreshed && <span>Refreshed {lastRefreshed}</span>}
+                  </div>
                   {refreshProgress && (
                     <div className="refresh-progress">
                       <span className="refresh-spinner" />

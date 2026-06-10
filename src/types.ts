@@ -21,6 +21,7 @@ export interface Playlist {
   added_date: string;
   channel_count: number;
   exp_date?: string | null;
+  last_refreshed?: string | null;
 }
 
 export interface XtreamUserInfo {
