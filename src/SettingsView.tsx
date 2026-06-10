@@ -1,11 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { Playlist, RefreshProgress } from './types';
 
 interface SettingsViewProps {
   onReloadChannels: () => Promise<void>;
   stripSuperscript: boolean;
   setStripSuperscript: (value: boolean) => void;
-  autoRefreshingIds: Set<number>;
 }
 
 function formatExpiry(expDate: string | null | undefined): string | null {
@@ -24,7 +23,6 @@ export default function SettingsView({
   onReloadChannels,
   stripSuperscript,
   setStripSuperscript,
-  autoRefreshingIds,
 }: SettingsViewProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [mpvFlags, setMpvFlags] = useState('');
@@ -34,9 +32,8 @@ export default function SettingsView({
   const [urlValue, setUrlValue] = useState('');
   const [urlLoading, setUrlLoading] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
-  const [refreshingId, setRefreshingId] = useState<number | null>(null);
-  const [refreshProgress, setRefreshProgress] = useState<RefreshProgress | null>(null);
-  const cleanupRef = useRef<(() => void) | null>(null);
+  const [refreshingIds, setRefreshingIds] = useState<Set<number>>(new Set());
+  const [progressById, setProgressById] = useState<Map<number, RefreshProgress>>(new Map());
   const [showXtreamInput, setShowXtreamInput] = useState(false);
   const [xtreamServer, setXtreamServer] = useState('');
   const [xtreamUsername, setXtreamUsername] = useState('');
@@ -50,18 +47,15 @@ export default function SettingsView({
   const [editXtreamPassword, setEditXtreamPassword] = useState('');
   const [editXtreamLoading, setEditXtreamLoading] = useState(false);
   const [editXtreamError, setEditXtreamError] = useState('');
-  const [autoRefresh, setAutoRefresh] = useState(false);
 
   const loadSettings = useCallback(async () => {
-    const [pl, flags, arSetting, version] = await Promise.all([
+    const [pl, flags, version] = await Promise.all([
       window.electronAPI.getPlaylists(),
       window.electronAPI.getSetting('mpv_flags'),
-      window.electronAPI.getSetting('auto_refresh'),
       window.electronAPI.getAppVersion(),
     ]);
     setPlaylists(pl);
     setMpvFlags(flags || '');
-    setAutoRefresh(arSetting === '1');
     setAppVersion(version);
   }, []);
 
@@ -69,7 +63,13 @@ export default function SettingsView({
     loadSettings();
   }, [loadSettings]);
 
-  
+  // One subscription for all refreshes, keyed by playlist
+  useEffect(() => {
+    return window.electronAPI.onRefreshProgress((progress) => {
+      setProgressById(prev => new Map(prev).set(progress.playlistId, progress));
+    });
+  }, []);
+
 
   const handleAddUrl = async () => {
     const url = urlValue.trim();
@@ -77,14 +77,12 @@ export default function SettingsView({
     if (!url || !name) return;
     setUrlLoading(true);
     try {
-      const result = await window.electronAPI.addPlaylistFromURL(name, url);
-      if (!result.canceled) {
-        setShowUrlInput(false);
-        setUrlValue('');
-        setPlaylistName('');
-        await onReloadChannels();
-        loadSettings();
-      }
+      await window.electronAPI.addPlaylistFromURL(name, url);
+      setShowUrlInput(false);
+      setUrlValue('');
+      setPlaylistName('');
+      await onReloadChannels();
+      loadSettings();
     } catch (e) {
       logToMain('error', 'handleAddUrl:', String(e));
     }
@@ -101,16 +99,14 @@ export default function SettingsView({
     setXtreamLoading(true);
     setXtreamError('');
     try {
-      const result = await window.electronAPI.addXtreamPlaylist(name, server, user, pass);
-      if (!result.canceled) {
-        setShowXtreamInput(false);
-        setXtreamServer('');
-        setXtreamUsername('');
-        setXtreamPassword('');
-        setPlaylistName('');
-        await onReloadChannels();
-        loadSettings();
-      }
+      await window.electronAPI.addXtreamPlaylist(name, server, user, pass);
+      setShowXtreamInput(false);
+      setXtreamServer('');
+      setXtreamUsername('');
+      setXtreamPassword('');
+      setPlaylistName('');
+      await onReloadChannels();
+      loadSettings();
     } catch (err: unknown) {
       logToMain('error', 'handleAddXtream:', err instanceof Error ? err.message : String(err));
       setXtreamError(err instanceof Error ? err.message : 'Failed to connect');
@@ -171,34 +167,31 @@ export default function SettingsView({
   };
 
   const handleRefresh = async (id: number) => {
-    setRefreshingId(id);
-    setRefreshProgress({ phase: 'downloading' });
-    const cleanup = window.electronAPI.onRefreshProgress((progress) => {
-      setRefreshProgress(progress);
-    });
-    cleanupRef.current = cleanup;
+    setRefreshingIds(prev => new Set(prev).add(id));
     try {
       await window.electronAPI.refreshPlaylist(id);
       await onReloadChannels();
     } catch (e) {
       logToMain('error', 'handleRefresh:', String(e));
+    } finally {
+      setRefreshingIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setProgressById(prev => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      loadSettings();
     }
-    cleanup();
-    cleanupRef.current = null;
-    setRefreshingId(null);
-    setRefreshProgress(null);
-    loadSettings();
   };
 
   const handleDelete = async (id: number) => {
     await window.electronAPI.deletePlaylist(id);
     await onReloadChannels();
     loadSettings();
-  };
-
-  const handleAutoRefreshChange = (value: boolean) => {
-    setAutoRefresh(value);
-    window.electronAPI.setSetting('auto_refresh', value ? '1' : '0');
   };
 
   const handleStripSuperscriptChange = (value: boolean) => {
@@ -215,8 +208,8 @@ export default function SettingsView({
             <p className="settings-empty">No playlists added yet.</p>
           )}
           {playlists.map(p => {
-            const isRefreshing = refreshingId === p.id || autoRefreshingIds.has(p.id);
-            const isActive = refreshingId === p.id && refreshProgress;
+            const isRefreshing = refreshingIds.has(p.id);
+            const refreshProgress = isRefreshing ? progressById.get(p.id) : undefined;
             return (
               <div key={p.id} className="playlist-item" data-id={p.id}>
                 <div className="playlist-item-info">
@@ -224,7 +217,7 @@ export default function SettingsView({
                   <span className="playlist-item-meta">
                     {p.channel_count} channels{p.type === 'xtream' ? ` \u00B7 Xtream${formatExpiry(p.exp_date) ? ` \u00B7 ${formatExpiry(p.exp_date)}` : ''}` : p.path ? ` \u00B7 ${p.path}` : ''}
                   </span>
-                  {isActive && (
+                  {refreshProgress && (
                     <div className="refresh-progress">
                       <span className="refresh-spinner" />
                       <span className="refresh-progress-label">
@@ -389,23 +382,6 @@ export default function SettingsView({
 
       <div className="settings-section">
         <h2>Appearance</h2>
-        <div className="theme-setting">
-          <span>Auto refresh on startup</span>
-          <div className="view-toggle">
-            <button
-              className={`toggle-btn${autoRefresh ? ' active' : ''}`}
-              onClick={() => handleAutoRefreshChange(true)}
-            >
-              On
-            </button>
-            <button
-              className={`toggle-btn${!autoRefresh ? ' active' : ''}`}
-              onClick={() => handleAutoRefreshChange(false)}
-            >
-              Off
-            </button>
-          </div>
-        </div>
         <div className="theme-setting">
           <span>Strip superscript (favourites)</span>
           <div className="view-toggle">

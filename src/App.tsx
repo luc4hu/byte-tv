@@ -17,8 +17,9 @@ export default function App() {
   const [stripSuperscript, setStripSuperscript] = useState(false);
   const [drillCategory, setDrillCategory] = useState<string | null>(null);
   const [debugText, setDebugText] = useState('');
-  const [autoRefreshingIds, setAutoRefreshingIds] = useState<Set<number>>(new Set());
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Search active in the categories view before drilling in, restored on drill-out
+  const savedCategorySearchRef = useRef('');
 
   const loadChannels = useCallback(async () => {
     try {
@@ -44,29 +45,7 @@ export default function App() {
 
   useEffect(() => {
     initTheme();
-    const init = async () => {
-      await loadChannels();
-
-      const autoRefreshSetting = await window.electronAPI.getSetting('auto_refresh');
-      if (autoRefreshSetting !== '1') return;
-
-      const playlists = await window.electronAPI.getPlaylists();
-      const promises = playlists.map(async (p) => {
-        setAutoRefreshingIds(prev => new Set([...prev, p.id]));
-        try {
-          await window.electronAPI.refreshPlaylist(p.id);
-        } finally {
-          setAutoRefreshingIds(prev => {
-            const next = new Set(prev);
-            next.delete(p.id);
-            return next;
-          });
-        }
-      });
-      await Promise.all(promises);
-      if (playlists.length > 0) await loadChannels();
-    };
-    init();
+    loadChannels();
   }, [loadChannels]);
 
   // "/" to focus search, Tab to cycle views
@@ -86,23 +65,24 @@ export default function App() {
         });
         setDrillCategory(null);
         setSearchQuery('');
+        savedCategorySearchRef.current = '';
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [settingsOpen]);
 
-  useEffect(() => {
-    if (drillCategory) {
+  // Entering a category clears the search (to browse its channels); leaving it
+  // restores whatever was searched in the categories view.
+  const handleDrillCategory = useCallback((cat: string | null) => {
+    if (cat !== null && drillCategory === null) {
+      savedCategorySearchRef.current = searchQuery;
       setSearchQuery('');
+    } else if (cat === null && drillCategory !== null) {
+      setSearchQuery(savedCategorySearchRef.current);
     }
-  }, [drillCategory]);
-
-  useEffect(() => {
-    if (drillCategory) {
-      setSearchQuery('');
-    }
-  }, [drillCategory]);
+    setDrillCategory(cat);
+  }, [drillCategory, searchQuery]);
 
   const handleToggleFavourite = useCallback(async (streamUrl: string) => {
     const { isFavourite } = await window.electronAPI.toggleFavourite(streamUrl);
@@ -134,6 +114,7 @@ export default function App() {
     setViewMode(mode);
     setDrillCategory(null);
     setSearchQuery('');
+    savedCategorySearchRef.current = '';
   };
 
   const handleSettingsToggle = () => {
@@ -203,7 +184,6 @@ export default function App() {
             onReloadChannels={loadChannels}
             stripSuperscript={stripSuperscript}
             setStripSuperscript={setStripSuperscript}
-            autoRefreshingIds={autoRefreshingIds}
           />
         ) : (
           <MainView
@@ -214,7 +194,7 @@ export default function App() {
             searchQuery={searchQuery}
             stripSuperscript={stripSuperscript}
             drillCategory={drillCategory}
-            setDrillCategory={setDrillCategory}
+            setDrillCategory={handleDrillCategory}
             onToggleFavourite={handleToggleFavourite}
             onPlayChannel={handlePlayChannel}
             onDebugText={setDebugText}

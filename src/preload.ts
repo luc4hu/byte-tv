@@ -12,15 +12,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPlaylists: () => ipcRenderer.invoke('playlists:getAll'),
   deletePlaylist: (id: number) => ipcRenderer.invoke('playlists:delete', id),
   refreshPlaylist: (id: number) => ipcRenderer.invoke('playlists:refresh', id),
-  onRefreshProgress: (callback: (progress: { phase: string; percent?: number }) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, progress: { phase: string; percent?: number }) => callback(progress);
+  onRefreshProgress: (callback: (progress: { playlistId: number; phase: string; percent?: number }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: { playlistId: number; phase: string; percent?: number }) => callback(progress);
     ipcRenderer.on('playlists:refreshProgress', handler);
     return () => { ipcRenderer.removeListener('playlists:refreshProgress', handler); };
   },
 
   // Channels
   getChannels: () => ipcRenderer.invoke('channels:getAll'),
-  searchChannels: (query: string) => ipcRenderer.invoke('channels:search', query),
   playChannel: (url: string, skipHistory?: boolean) => ipcRenderer.invoke('channels:play', url, skipHistory),
 
   // History
@@ -39,5 +38,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearLogs: () => ipcRenderer.invoke('logs:clear'),
   logFromRenderer: (level: string, message: string) => ipcRenderer.invoke('logs:fromRenderer', level, message),
   openLogsWindow: () => ipcRenderer.invoke('logs:openWindow'),
-
-  });
+});

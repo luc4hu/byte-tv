@@ -9,17 +9,18 @@ interface LogEntry {
   message: string;
 }
 
-declare global {
-  interface Window {
-    electronAPI: {
-      getLogs: () => Promise<LogEntry[]>;
-      clearLogs: () => Promise<void>;
-      openLogsFolder: () => Promise<void>;
-      onLogEntry: (callback: (entry: LogEntry) => void) => () => void;
-      logFromRenderer: (level: LogLevel, message: string) => Promise<void>;
-    };
-  }
+// The logs window has its own preload with a different API surface than the
+// main window, so don't redeclare Window.electronAPI globally (it would
+// conflict with the declaration in types.ts) — cast locally instead.
+interface LogsAPI {
+  getLogs: () => Promise<LogEntry[]>;
+  clearLogs: () => Promise<void>;
+  openLogsFolder: () => Promise<void>;
+  onLogEntry: (callback: (entry: LogEntry) => void) => () => void;
+  logFromRenderer: (level: LogLevel, message: string) => Promise<void>;
 }
+
+const api = (window as unknown as { electronAPI: LogsAPI }).electronAPI;
 
 const ALL_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
@@ -49,9 +50,9 @@ function LogsViewer() {
 
   // Initial load + live tail
   useEffect(() => {
-    window.electronAPI.getLogs().then(setLines);
+    api.getLogs().then(setLines);
 
-    const unsub = window.electronAPI.onLogEntry((entry) => {
+    const unsub = api.onLogEntry((entry) => {
       setLines(prev => [...prev, entry].slice(-2000));
     });
     unsubRef.current = unsub;
@@ -76,12 +77,12 @@ function LogsViewer() {
   };
 
   const handleClear = async () => {
-    await window.electronAPI.clearLogs();
+    await api.clearLogs();
     setLines([]);
   };
 
   const handleOpenFolder = () => {
-    window.electronAPI.openLogsFolder();
+    api.openLogsFolder();
   };
 
   return (

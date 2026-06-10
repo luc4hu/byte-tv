@@ -52,6 +52,7 @@ export interface LogEntry {
 }
 
 export interface RefreshProgress {
+  playlistId: number;
   phase: 'downloading' | 'parsing' | 'inserting';
   percent?: number; // 0-100, only during downloading phase when Content-Length is known
 }
@@ -60,8 +61,8 @@ declare global {
   interface Window {
     electronAPI: {
       getAppVersion: () => Promise<string>;
-      addPlaylistFromURL: (name: string, url: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
-      addXtreamPlaylist: (name: string, serverUrl: string, username: string, password: string) => Promise<{ canceled: boolean; playlistId?: number; count?: number }>;
+      addPlaylistFromURL: (name: string, url: string) => Promise<{ playlistId: number; count: number }>;
+      addXtreamPlaylist: (name: string, serverUrl: string, username: string, password: string) => Promise<{ playlistId: number; count: number }>;
       getXtreamPlaylistDetails: (id: number) => Promise<XtreamPlaylistDetails>;
       updateXtreamPlaylist: (id: number, name: string, serverUrl: string, username: string, password: string) => Promise<{ count: number }>;
       getPlaylists: () => Promise<Playlist[]>;
@@ -69,15 +70,12 @@ declare global {
       refreshPlaylist: (id: number) => Promise<{ count: number }>;
       onRefreshProgress: (callback: (progress: RefreshProgress) => void) => () => void;
       getChannels: () => Promise<Channel[]>;
-      searchChannels: (query: string) => Promise<Channel[]>;
       playChannel: (url: string, skipHistory?: boolean) => Promise<void>;
       getHistory: () => Promise<string[]>;
       getFavourites: () => Promise<string[]>;
       toggleFavourite: (streamUrl: string) => Promise<{ isFavourite: boolean }>;
       getSetting: (key: string) => Promise<string>;
       setSetting: (key: string, value: string) => Promise<void>;
-      getCacheSize: () => Promise<number>;
-      clearCache: () => Promise<number>;
       getLogs: () => Promise<LogEntry[]>;
       clearLogs: () => Promise<void>;
       logFromRenderer: (level: LogLevel, message: string) => Promise<void>;

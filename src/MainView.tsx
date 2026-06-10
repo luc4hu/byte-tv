@@ -210,13 +210,15 @@ export default function MainView({
   const displayName = (ch: Channel) =>
     stripSuperscript && viewMode === 'favourites' ? stripSuperscripts(ch.name) : ch.name;
 
-  if (visibleItems.length === 0) {
-    return (
-      <div id="empty-state">
-        <p>No channels loaded. Open Settings to add a playlist.</p>
-      </div>
-    );
-  }
+  const emptyMessage = allChannels.length === 0
+    ? 'No channels loaded. Open Settings to add a playlist.'
+    : searchQuery.trim()
+      ? `No results for "${searchQuery.trim()}".`
+      : viewMode === 'history' && !drillCategory
+        ? 'No channels played yet.'
+        : viewMode === 'favourites' && !drillCategory
+          ? 'No favourites yet. Right-click a channel to add one.'
+          : 'Nothing here.';
 
   return (
     <>
@@ -224,6 +226,11 @@ export default function MainView({
         <div className="drill-header">
           <button className="back-btn" onClick={() => setDrillCategory(null)}>&larr; Back</button>
           <span className="drill-title">{drillCategory}</span>
+        </div>
+      )}
+      {visibleItems.length === 0 && (
+        <div id="empty-state">
+          <p>{emptyMessage}</p>
         </div>
       )}
       <div

@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { LogEntry, LogLevel } from './types';
 
 const MAX_BUFFER = 2000;
+const MAX_LOG_FILE_SIZE = 5 * 1024 * 1024;
 const ringBuffer: LogEntry[] = [];
 let writeStream: fs.WriteStream | null = null;
 let subscribers: Array<(entry: LogEntry) => void> = [];
@@ -65,6 +66,16 @@ export function initLogger(logDir: string): void {
       fs.mkdirSync(logDir, { recursive: true });
     }
     const logPath = path.join(logDir, 'byte-tv.log');
+
+    // Rotate at startup so the log file doesn't grow unbounded
+    try {
+      if (fs.statSync(logPath).size > MAX_LOG_FILE_SIZE) {
+        fs.renameSync(logPath, `${logPath}.1`);
+      }
+    } catch {
+      // no existing log file
+    }
+
     writeStream = fs.createWriteStream(logPath, { flags: 'a' });
 
     const entry: LogEntry = {

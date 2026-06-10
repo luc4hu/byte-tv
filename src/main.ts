@@ -97,6 +97,8 @@ function parseM3U(content: string): Channel[] {
 
     let streamUrl = '';
     for (let j = i + 1; j < lines.length; j++) {
+      // Stop at the next entry so a channel without a URL doesn't steal the following one's
+      if (lines[j].startsWith('#EXTINF:')) break;
       if (!lines[j].startsWith('#')) {
         streamUrl = lines[j];
         break;
@@ -124,19 +126,21 @@ async function readResponseBody(
   if (!body) return response.text();
 
   const reader = body.getReader();
+  // One decoder for the whole stream — multi-byte UTF-8 sequences can span chunks
+  const decoder = new TextDecoder();
   const chunks: string[] = [];
   let received = 0;
 
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    const chunk = new TextDecoder().decode(value, { stream: true });
-    chunks.push(chunk);
+    chunks.push(decoder.decode(value, { stream: true }));
     received += value.byteLength;
     if (contentLength > 0) {
       onProgress(Math.round((received / contentLength) * 100));
     }
   }
+  chunks.push(decoder.decode());
 
   return chunks.join('');
 }
@@ -190,6 +194,20 @@ function xtreamStreamIdFromUrl(streamUrl: string): string | null {
 }
 
 function remapStreamUrlReferences(oldByStreamId: Map<string, string>, channels: Channel[]) {
+  const getHistory = db.prepare('SELECT last_played FROM history WHERE stream_url = ?');
+  const moveFavourite = db.prepare('INSERT OR IGNORE INTO favourites (stream_url) SELECT ? WHERE EXISTS (SELECT 1 FROM favourites WHERE stream_url = ?)');
+  const deleteFavourite = db.prepare('DELETE FROM favourites WHERE stream_url = ?');
+  const upsertHistory = db.prepare(`
+    INSERT INTO history (stream_url, last_played)
+    VALUES (?, ?)
+    ON CONFLICT(stream_url) DO UPDATE SET last_played =
+      CASE
+        WHEN history.last_played > excluded.last_played THEN history.last_played
+        ELSE excluded.last_played
+      END
+  `);
+  const deleteHistory = db.prepare('DELETE FROM history WHERE stream_url = ?');
+
   for (const ch of channels) {
     const streamId = xtreamStreamIdFromUrl(ch.streamUrl);
     if (!streamId) continue;
@@ -197,23 +215,14 @@ function remapStreamUrlReferences(oldByStreamId: Map<string, string>, channels: 
     const oldUrl = oldByStreamId.get(streamId);
     if (!oldUrl || oldUrl === ch.streamUrl) continue;
 
-    const history = db.prepare('SELECT last_played FROM history WHERE stream_url = ?').get(oldUrl) as
-      { last_played: number } | undefined;
+    const history = getHistory.get(oldUrl) as { last_played: number } | undefined;
 
-    db.prepare('INSERT OR IGNORE INTO favourites (stream_url) SELECT ? WHERE EXISTS (SELECT 1 FROM favourites WHERE stream_url = ?)').run(ch.streamUrl, oldUrl);
-    db.prepare('DELETE FROM favourites WHERE stream_url = ?').run(oldUrl);
+    moveFavourite.run(ch.streamUrl, oldUrl);
+    deleteFavourite.run(oldUrl);
 
     if (history) {
-      db.prepare(`
-        INSERT INTO history (stream_url, last_played)
-        VALUES (?, ?)
-        ON CONFLICT(stream_url) DO UPDATE SET last_played =
-          CASE
-            WHEN history.last_played > excluded.last_played THEN history.last_played
-            ELSE excluded.last_played
-          END
-      `).run(ch.streamUrl, history.last_played);
-      db.prepare('DELETE FROM history WHERE stream_url = ?').run(oldUrl);
+      upsertHistory.run(ch.streamUrl, history.last_played);
+      deleteHistory.run(oldUrl);
     }
   }
 }
@@ -362,7 +371,7 @@ function registerIPC() {
       db.exec('COMMIT');
       logInfo(`[import:url] inserted ${channels.length} rows in ${Date.now() - t2}ms`);
       logInfo(`[import:url] total: ${Date.now() - t0}ms`);
-      return { canceled: false, playlistId, count: channels.length };
+      return { playlistId, count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
       logError('[import:url]', e);
@@ -394,7 +403,7 @@ function registerIPC() {
       db.exec('COMMIT');
       logInfo(`[import:xtream] inserted ${channels.length} rows in ${Date.now() - t1}ms`);
       logInfo(`[import:xtream] total: ${Date.now() - t0}ms`);
-      return { canceled: false, playlistId, count: channels.length };
+      return { playlistId, count: channels.length };
     } catch (e) {
       db.exec('ROLLBACK');
       logError('[import:xtream]', e);
@@ -490,13 +499,14 @@ function registerIPC() {
         const now = Date.now();
         if (percent != null && now - lastReport < 200) return;
         lastReport = now;
-        sender.send('playlists:refreshProgress', { phase, percent });
+        sender.send('playlists:refreshProgress', { playlistId, phase, percent });
       }
     };
 
     let channels: Channel[];
     let expDate = '';
     if (playlist.type === 'xtream') {
+      report('downloading');
       const result = await fetchXtreamChannels(playlist.path, playlist.xtream_username!, playlist.xtream_password!);
       channels = result.channels;
       expDate = result.expDate;
@@ -511,7 +521,7 @@ function registerIPC() {
         content = await readResponseBody(response, (pct) => report('downloading', pct));
         logInfo(`[refresh:${playlist.name}] fetched URL in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
       } else {
-        content = fs.readFileSync(playlist.path, 'utf-8');
+        content = await fs.promises.readFile(playlist.path, 'utf-8');
         logInfo(`[refresh:${playlist.name}] read file in ${Date.now() - t0}ms (${(content.length / 1024).toFixed(0)} KB)`);
       }
       report('parsing');
@@ -563,16 +573,6 @@ function registerIPC() {
     `).all();
   });
 
-  ipcMain.handle('channels:search', (_event, query: string) => {
-    return db.prepare(`
-      SELECT c.*, p.name as playlist_name
-      FROM channels c
-      LEFT JOIN playlists p ON c.playlist_id = p.id
-      WHERE c.name LIKE '%' || ? || '%'
-      ORDER BY c.id ASC
-    `).all(query);
-  });
-
   ipcMain.handle('channels:play', async (_event, url: string, skipHistory = false) => {
     if (!skipHistory) {
       db.prepare(`
@@ -592,9 +592,10 @@ function registerIPC() {
       return;
     }
 
-    // mpv not running or IPC failed — spawn a new instance
+    // mpv not running or IPC failed — spawn a new instance.
+    // '--' stops option parsing so a stream URL starting with '-' can't inject mpv options.
     await stopMpv();
-    const args = [...flags, '--input-ipc-server=' + mpvSocketPath(), url];
+    const args = [...flags, '--input-ipc-server=' + mpvSocketPath(), '--', url];
     logInfo('[mpv]', args.join(' '));
     mpvChild = spawn('mpv', args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     mpvChild.stdout?.on('data', (d) => {
@@ -651,7 +652,7 @@ function registerIPC() {
 }
 
 const createWindow = () => {
-  mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1200,
     height: 800,
     autoHideMenuBar: true,
@@ -659,45 +660,36 @@ const createWindow = () => {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+  mainWindow = win;
 
-  mainWindow.maximize();
+  win.maximize();
 
-  mainWindow.webContents.on('zoom-changed', (_event, direction) => {
-    const current = mainWindow.webContents.getZoomFactor();
+  win.webContents.on('zoom-changed', (_event, direction) => {
+    const current = win.webContents.getZoomFactor();
     if (direction === 'in') {
-      mainWindow.webContents.setZoomFactor(Math.min(current + 0.1, 3));
+      win.webContents.setZoomFactor(Math.min(current + 0.1, 3));
     } else {
-      mainWindow.webContents.setZoomFactor(Math.max(current - 0.1, 0.3));
+      win.webContents.setZoomFactor(Math.max(current - 0.1, 0.3));
     }
   });
 
-  mainWindow.webContents.on('before-input-event', (_event, input) => {
+  win.webContents.on('before-input-event', (_event, input) => {
     if (input.key === 'F12' && input.type === 'keyDown') {
-      if (mainWindow.webContents.isDevToolsOpened()) {
-        mainWindow.webContents.closeDevTools();
+      if (win.webContents.isDevToolsOpened()) {
+        win.webContents.closeDevTools();
       } else {
-        mainWindow.webContents.openDevTools();
+        win.webContents.openDevTools();
       }
     }
   });
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+    win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(
+    win.loadFile(
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
-
-  // Subscribe to new log entries and forward them to all windows
-  subscribeLogs((entry) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('logs:entry', entry);
-    }
-    if (logsWindow && !logsWindow.isDestroyed()) {
-      logsWindow.webContents.send('logs:entry', entry);
-    }
-  });
 };
 
 function createLogsWindow() {
@@ -706,7 +698,7 @@ function createLogsWindow() {
     return;
   }
 
-  logsWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 900,
     height: 600,
     autoHideMenuBar: true,
@@ -715,13 +707,14 @@ function createLogsWindow() {
       preload: path.join(__dirname, 'logs-preload.js'),
     },
   });
+  logsWindow = win;
 
-  logsWindow.on('closed', () => { logsWindow = null; });
+  win.on('closed', () => { logsWindow = null; });
 
   if (LOGS_WINDOW_VITE_DEV_SERVER_URL) {
-    logsWindow.loadURL(`${LOGS_WINDOW_VITE_DEV_SERVER_URL}/logs-index.html`);
+    win.loadURL(`${LOGS_WINDOW_VITE_DEV_SERVER_URL}/logs-index.html`);
   } else {
-    logsWindow.loadFile(
+    win.loadFile(
       path.join(__dirname, `../renderer/${LOGS_WINDOW_VITE_NAME}/logs-index.html`),
     );
   }
@@ -741,6 +734,17 @@ app.on('ready', () => {
 
   createWindow();
   logInfo(`[startup] createWindow done in ${Date.now() - t0}ms`);
+
+  // Subscribe once — createWindow can run again on macOS 'activate', and
+  // subscribers are never removed, so subscribing there duplicates entries.
+  subscribeLogs((entry) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('logs:entry', entry);
+    }
+    if (logsWindow && !logsWindow.isDestroyed()) {
+      logsWindow.webContents.send('logs:entry', entry);
+    }
+  });
 });
 
 app.on('window-all-closed', () => {
@@ -756,10 +760,20 @@ app.on('activate', () => {
   }
 });
 
-app.on('before-quit', async () => {
-  // Try graceful IPC shutdown first, then fall back to kill
-  const sent = await mpvCommand(['quit']).catch(() => false);
-  if (!sent) {
-    await stopMpv();
-  }
+// Electron doesn't await async 'before-quit' listeners, so block the first
+// quit, run the mpv shutdown, then quit for real.
+let mpvShutdownDone = false;
+app.on('before-quit', (event) => {
+  if (mpvShutdownDone) return;
+  event.preventDefault();
+  (async () => {
+    // Try graceful IPC shutdown first, then fall back to kill
+    const sent = await mpvCommand(['quit']).catch(() => false);
+    if (!sent) {
+      await stopMpv();
+    }
+  })().finally(() => {
+    mpvShutdownDone = true;
+    app.quit();
+  });
 });
