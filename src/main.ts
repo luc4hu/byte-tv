@@ -153,40 +153,53 @@ async function fetchXtreamChannels(
 ): Promise<{ channels: Channel[]; expDate: string }> {
   const base = serverUrl.replace(/\/+$/, '');
   const apiUrl = `${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+  let t: number;
 
   // Authenticate
+  t = Date.now();
   const authRes = await net.fetch(apiUrl);
   if (!authRes.ok) throw new Error(`Xtream server error: ${authRes.status}`);
   const auth = (await authRes.json()) as XtreamAuthResponse;
   if (auth.user_info?.auth !== 1) {
     throw new Error('Xtream authentication failed: invalid credentials or account inactive');
   }
+  logDebug(`[xtream:auth] request+parse done in ${Date.now() - t}ms`);
 
   const expDate = auth.user_info?.exp_date ?? '';
 
-  // Fetch live categories
-  const catRes = await net.fetch(`${apiUrl}&action=get_live_categories`);
+  // Fetch categories and streams concurrently — they are independent
+  t = Date.now();
+  const [catRes, streamRes] = await Promise.all([
+    net.fetch(`${apiUrl}&action=get_live_categories`),
+    net.fetch(`${apiUrl}&action=get_live_streams`),
+  ]);
+
   if (!catRes.ok) throw new Error(`Failed to fetch categories: ${catRes.status}`);
-  const categories = (await catRes.json()) as XtreamCategory[];
+  if (!streamRes.ok) throw new Error(`Failed to fetch streams: ${streamRes.status}`);
+  logDebug(`[xtream:fetch] categories+streams HTTP done in ${Date.now() - t}ms`);
+
+  t = Date.now();
+  const [categories, streams] = await Promise.all([
+    catRes.json() as Promise<XtreamCategory[]>,
+    streamRes.json() as Promise<XtreamStream[]>,
+  ]);
+  logDebug(`[xtream:parse] categories (${categories.length}) + streams (${streams.length}) JSON parsed in ${Date.now() - t}ms`);
+
+  t = Date.now();
   const categoryMap = new Map<string, string>();
   for (const cat of categories) {
     categoryMap.set(String(cat.category_id), cat.category_name);
   }
 
-  // Fetch live streams
-  const streamRes = await net.fetch(`${apiUrl}&action=get_live_streams`);
-  if (!streamRes.ok) throw new Error(`Failed to fetch streams: ${streamRes.status}`);
-  const streams = (await streamRes.json()) as XtreamStream[];
+  const channels: Channel[] = streams.map((s) => ({
+    name: s.name,
+    logo: s.stream_icon || '',
+    groupTitle: categoryMap.get(String(s.category_id)) || '',
+    streamUrl: `${base}/live/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${s.stream_id}.ts`,
+  }));
+  logDebug(`[xtream:build] built ${channels.length} channels in ${Date.now() - t}ms`);
 
-  return {
-    channels: streams.map((s) => ({
-      name: s.name,
-      logo: s.stream_icon || '',
-      groupTitle: categoryMap.get(String(s.category_id)) || '',
-      streamUrl: `${base}/live/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${s.stream_id}.ts`,
-    })),
-    expDate,
-  };
+  return { channels, expDate };
 }
 
 function xtreamStreamIdFromUrl(streamUrl: string): string | null {
@@ -350,18 +363,26 @@ function registerIPC() {
     const t1 = Date.now();
     db.exec('BEGIN');
     try {
+      const t_pl = Date.now();
       db.prepare(
         "INSERT INTO playlists (name, path, type, xtream_username, xtream_password, exp_date, last_refreshed) VALUES (?, ?, 'xtream', ?, ?, ?, datetime('now'))"
       ).run(name, normalizedUrl, username, password, expDate || null);
       const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
+      logDebug(`[import:xtream] playlist row inserted in ${Date.now() - t_pl}ms`);
 
+      const t_ins = Date.now();
       const insert = db.prepare(
         'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
       );
       for (const ch of channels) {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
+      logDebug(`[import:xtream] inserted ${channels.length} channel rows in ${Date.now() - t_ins}ms`);
+
+      const t_commit = Date.now();
       db.exec('COMMIT');
+      logDebug(`[import:xtream] commit in ${Date.now() - t_commit}ms`);
+
       logInfo(`[import:xtream] inserted ${channels.length} rows in ${Date.now() - t1}ms`);
       logInfo(`[import:xtream] total: ${Date.now() - t0}ms`);
       return { playlistId, count: channels.length };
@@ -396,30 +417,44 @@ function registerIPC() {
     logInfo(`[update:xtream:${playlist.name}] fetched ${channels.length} channels in ${Date.now() - t0}ms`);
 
     const normalizedUrl = serverUrl.replace(/\/+$/, '');
+
+    const t_old = Date.now();
     const oldRows = db.prepare('SELECT stream_url FROM channels WHERE playlist_id = ?').all(playlistId) as { stream_url: string }[];
     const oldByStreamId = new Map<string, string>();
     for (const row of oldRows) {
       const streamId = xtreamStreamIdFromUrl(row.stream_url);
       if (streamId) oldByStreamId.set(streamId, row.stream_url);
     }
+    logDebug(`[update:xtream:${playlist.name}] read ${oldRows.length} old rows + built stream id map in ${Date.now() - t_old}ms`);
 
     const t1 = Date.now();
     db.exec('BEGIN');
     try {
+      const t_upd = Date.now();
       db.prepare(`
         UPDATE playlists
         SET name = ?, path = ?, xtream_username = ?, xtream_password = ?, exp_date = ?, last_refreshed = datetime('now')
         WHERE id = ?
       `).run(name, normalizedUrl, username, password, expDate || null, playlistId);
-      db.prepare('DELETE FROM channels WHERE playlist_id = ?').run(playlistId);
+      logDebug(`[update:xtream:${playlist.name}] playlist update in ${Date.now() - t_upd}ms`);
 
+      const t_del = Date.now();
+      db.prepare('DELETE FROM channels WHERE playlist_id = ?').run(playlistId);
+      logDebug(`[update:xtream:${playlist.name}] delete old channels in ${Date.now() - t_del}ms`);
+
+      const t_ins = Date.now();
       const insert = db.prepare(
         'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
       );
       for (const ch of channels) {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
+      logDebug(`[update:xtream:${playlist.name}] inserted ${channels.length} channels in ${Date.now() - t_ins}ms`);
+
+      const t_remap = Date.now();
       remapStreamUrlReferences(oldByStreamId, channels);
+      logDebug(`[update:xtream:${playlist.name}] remap references in ${Date.now() - t_remap}ms`);
+
       db.exec('COMMIT');
       logInfo(`[update:xtream:${name}] updated ${channels.length} rows in ${Date.now() - t1}ms`);
       return { count: channels.length };
@@ -495,15 +530,27 @@ function registerIPC() {
     const t2 = Date.now();
     db.exec('BEGIN');
     try {
+      const t_del = Date.now();
       db.prepare('DELETE FROM channels WHERE playlist_id = ?').run(playlistId);
+      logDebug(`[refresh:${playlist.name}] delete old channels in ${Date.now() - t_del}ms`);
+
+      const t_ins = Date.now();
       const insert = db.prepare(
         'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
       );
       for (const ch of channels) {
         insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
       }
+      logDebug(`[refresh:${playlist.name}] inserted ${channels.length} channels in ${Date.now() - t_ins}ms`);
+
+      const t_upd = Date.now();
       db.prepare("UPDATE playlists SET exp_date = ?, last_refreshed = datetime('now') WHERE id = ?").run(expDate || null, playlistId);
+      logDebug(`[refresh:${playlist.name}] update playlist row in ${Date.now() - t_upd}ms`);
+
+      const t_commit = Date.now();
       db.exec('COMMIT');
+      logDebug(`[refresh:${playlist.name}] commit in ${Date.now() - t_commit}ms`);
+
       logInfo(`[refresh:${playlist.name}] deleted + inserted ${channels.length} rows in ${Date.now() - t2}ms`);
       logInfo(`[refresh:${playlist.name}] total: ${Date.now() - t0}ms`);
       return { count: channels.length };
