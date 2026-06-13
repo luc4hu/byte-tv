@@ -84,6 +84,27 @@ export default function App() {
     setDrillCategory(cat);
   }, [drillCategory, searchQuery]);
 
+  // Go back one level: leave settings, else drill out of a category.
+  const goBack = useCallback(() => {
+    if (settingsOpen) {
+      setSettingsOpen(false);
+    } else if (drillCategory !== null) {
+      handleDrillCategory(null);
+    }
+  }, [settingsOpen, drillCategory, handleDrillCategory]);
+
+  // Mouse "back" button (button 3) acts like clicking the Back button
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (e.button === 3) {
+        e.preventDefault();
+        goBack();
+      }
+    };
+    document.addEventListener('mouseup', handler);
+    return () => document.removeEventListener('mouseup', handler);
+  }, [goBack]);
+
   const handleToggleFavourite = useCallback(async (streamUrl: string) => {
     const { isFavourite } = await window.electronAPI.toggleFavourite(streamUrl);
     setFavouriteUrls(prev => {
