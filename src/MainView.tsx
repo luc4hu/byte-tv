@@ -8,6 +8,13 @@ function stripSuperscripts(s: string): string {
   return s.replace(SUPERSCRIPT_RE, '').replace(/\s{2,}/g, ' ').trim();
 }
 
+// Search-only normalization: NFKD folds superscript/modifier-letter forms
+// (e.g. "ᵁᴴᴰ" -> "uhd", "³⁸⁴⁰" -> "3840") to their ASCII base so they match
+// plain-text tokens. No-op for plain ASCII names. Display still uses ch.name.
+function searchNormalize(s: string): string {
+  return s.normalize('NFKD').toLowerCase();
+}
+
 interface MainViewProps {
   allChannels: Channel[];
   favouriteUrls: Set<string>;
@@ -40,20 +47,20 @@ export default function MainView({
   const [visibleCount, setVisibleCount] = useState(RENDER_BATCH_SIZE);
 
   const { allCategories, channelNamesLower, categoryNamesLower } = useMemo(() => {
-    const channelNamesLower = allChannels.map(ch => ch.name.toLowerCase());
+    const channelNamesLower = allChannels.map(ch => searchNormalize(ch.name));
     const catMap = new Map<string, number>();
     for (const ch of allChannels) {
       const group = ch.group_title || 'Uncategorized';
       catMap.set(group, (catMap.get(group) || 0) + 1);
     }
     const allCategories = Array.from(catMap, ([name, count]) => ({ name, count }));
-    const categoryNamesLower = allCategories.map(c => c.name.toLowerCase());
+    const categoryNamesLower = allCategories.map(c => searchNormalize(c.name));
     return { allCategories, channelNamesLower, categoryNamesLower };
   }, [allChannels]);
 
   const { items, totalCount, elapsed, renderMode } = useMemo(() => {
     const t0 = performance.now();
-    const q = searchQuery.trim().toLowerCase();
+    const q = searchNormalize(searchQuery.trim());
     const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
 
     let channels: Channel[] | null = null;
@@ -65,7 +72,7 @@ export default function MainView({
         channels = catChannels;
       } else {
         channels = catChannels.filter(ch => {
-          const name = ch.name.toLowerCase();
+          const name = searchNormalize(ch.name);
           for (const tok of tokens) {
             if (!name.includes(tok)) return false;
           }
@@ -83,7 +90,7 @@ export default function MainView({
         channels = historyChannels;
       } else {
         channels = historyChannels.filter(ch => {
-          const name = ch.name.toLowerCase();
+          const name = searchNormalize(ch.name);
           for (const tok of tokens) {
             if (!name.includes(tok)) return false;
           }
@@ -105,7 +112,7 @@ export default function MainView({
         channels = favChannels;
       } else {
         channels = favChannels.filter(ch => {
-          const name = ch.name.toLowerCase();
+          const name = searchNormalize(ch.name);
           for (const tok of tokens) {
             if (!name.includes(tok)) return false;
           }
