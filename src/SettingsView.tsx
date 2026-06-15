@@ -35,7 +35,9 @@ export default function SettingsView({
   setStripSuperscript,
 }: SettingsViewProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [videoPlayer, setVideoPlayer] = useState<'mpv' | 'vlc'>('mpv');
   const [mpvFlags, setMpvFlags] = useState('');
+  const [vlcFlags, setVlcFlags] = useState('');
   const [appVersion, setAppVersion] = useState('');
   
   const [showUrlInput, setShowUrlInput] = useState(false);
@@ -59,13 +61,17 @@ export default function SettingsView({
   const [editXtreamError, setEditXtreamError] = useState('');
 
   const loadSettings = useCallback(async () => {
-    const [pl, flags, version] = await Promise.all([
+    const [pl, player, flags, vlc, version] = await Promise.all([
       window.electronAPI.getPlaylists(),
+      window.electronAPI.getSetting('video_player'),
       window.electronAPI.getSetting('mpv_flags'),
+      window.electronAPI.getSetting('vlc_flags'),
       window.electronAPI.getAppVersion(),
     ]);
     setPlaylists(pl);
+    setVideoPlayer(player === 'vlc' ? 'vlc' : 'mpv');
     setMpvFlags(flags || '');
+    setVlcFlags(vlc || '');
     setAppVersion(version);
   }, []);
 
@@ -202,6 +208,11 @@ export default function SettingsView({
     await window.electronAPI.deletePlaylist(id);
     await onReloadChannels();
     loadSettings();
+  };
+
+  const handleVideoPlayerChange = (value: 'mpv' | 'vlc') => {
+    setVideoPlayer(value);
+    window.electronAPI.setSetting('video_player', value);
   };
 
   const handleStripSuperscriptChange = (value: boolean) => {
@@ -385,7 +396,24 @@ export default function SettingsView({
       </div>
 
       <div className="settings-section">
-        <h2>mpv Flags</h2>
+        <h2>Player</h2>
+        <div className="theme-setting">
+          <span>Open streams with</span>
+          <div className="view-toggle">
+            <button
+              className={`toggle-btn${videoPlayer === 'mpv' ? ' active' : ''}`}
+              onClick={() => handleVideoPlayerChange('mpv')}
+            >
+              mpv
+            </button>
+            <button
+              className={`toggle-btn${videoPlayer === 'vlc' ? ' active' : ''}`}
+              onClick={() => handleVideoPlayerChange('vlc')}
+            >
+              VLC
+            </button>
+          </div>
+        </div>
         <p className="settings-hint">Custom flags passed to mpv on playback (space-separated).</p>
         <textarea
           id="mpv-flags-input"
@@ -393,6 +421,14 @@ export default function SettingsView({
           value={mpvFlags}
           onChange={e => setMpvFlags(e.target.value)}
           onBlur={() => window.electronAPI.setSetting('mpv_flags', mpvFlags)}
+        />
+        <p className="settings-hint">Custom flags passed to VLC on playback (space-separated).</p>
+        <textarea
+          id="vlc-flags-input"
+          placeholder="e.g. --fullscreen --no-video-title-show"
+          value={vlcFlags}
+          onChange={e => setVlcFlags(e.target.value)}
+          onBlur={() => window.electronAPI.setSetting('vlc_flags', vlcFlags)}
         />
       </div>
 

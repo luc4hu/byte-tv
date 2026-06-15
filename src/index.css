@@ -617,7 +617,8 @@ main {
   background: var(--bg-active-hover);
 }
 
-#mpv-flags-input {
+#mpv-flags-input,
+#vlc-flags-input {
   width: 100%;
   min-height: 60px;
   padding: 10px 12px;
@@ -632,7 +633,8 @@ main {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-#mpv-flags-input:focus {
+#mpv-flags-input:focus,
+#vlc-flags-input:focus {
   border-color: var(--border-focus);
   box-shadow: var(--shadow-md);
 }

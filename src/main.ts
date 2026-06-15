@@ -305,6 +305,59 @@ async function stopMpv() {
   mpvChild = null;
 }
 
+function settingFlags(key: string): string[] {
+  const flagsStr = (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? '';
+  return flagsStr.trim() ? flagsStr.trim().split(/\s+/) : [];
+}
+
+async function playMpv(url: string) {
+  const flags = settingFlags('mpv_flags');
+
+  // Try to replace the stream in the running mpv instance via IPC
+  const replaced = await mpvCommand(['loadfile', url, 'replace']);
+  if (replaced) {
+    logInfo('[mpv] replaced stream via IPC');
+    return;
+  }
+
+  // mpv not running or IPC failed — spawn a new instance.
+  // '--' stops option parsing so a stream URL starting with '-' can't inject mpv options.
+  await stopMpv();
+  const args = [...flags, '--input-ipc-server=' + mpvSocketPath(), '--', url];
+  logInfo('[mpv]', args.join(' '));
+  mpvChild = spawn('mpv', args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  mpvChild.stdout?.on('data', (d) => {
+    // mpv outputs playback status lines like "AV: 00:00:13 / 00:00:32 (41%)..."
+    // multiple times per second. Filter them out to avoid flooding the logs.
+    const lines = d.toString().split(/\r?\n|\r/).map((l: string) => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      if (!/^(AV:|\s*\(Paused\) AV:)/.test(line)) {
+        logInfo('[mpv:stdout]', line);
+      }
+    }
+  });
+  mpvChild.stderr?.on('data', (d) => logWarn('[mpv:stderr]', d.toString().trimEnd()));
+  mpvChild.on('error', (e) => logError('[mpv:spawn]', e.message));
+  mpvChild.on('exit', (code, signal) => logInfo('[mpv:exit]', `code=${code} signal=${signal ?? 'none'}`));
+  mpvChild.unref();
+}
+
+function playVlc(url: string) {
+  const flags = settingFlags('vlc_flags');
+  // '--one-instance' forwards the URL to a running VLC, replacing the current
+  // item (--playlist-enqueue defaults off). '--' stops option parsing so a URL
+  // starting with '-' can't inject options. With one-instance this spawned
+  // child is short-lived (it hands off and exits), so there's no persistent
+  // process to track — VLC runs as an independent app and is not managed on quit.
+  const args = [...flags, '--one-instance', '--', url];
+  logInfo('[vlc]', args.join(' '));
+  const child = spawn('vlc', args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stderr?.on('data', (d) => logWarn('[vlc:stderr]', d.toString().trimEnd()));
+  child.on('error', (e) => logError('[vlc:spawn]', e.message));
+  child.on('exit', (code, signal) => logInfo('[vlc:exit]', `code=${code} signal=${signal ?? 'none'}`));
+  child.unref();
+}
+
 function initDB() {
   const dbPath = path.join(app.getPath('userData'), 'channels.db');
   db = new DatabaseSync(dbPath);
@@ -590,36 +643,12 @@ function registerIPC() {
       `).run(url, Date.now());
     }
 
-    const flagsStr = (db.prepare('SELECT value FROM settings WHERE key = ?').get('mpv_flags') as { value: string } | undefined)?.value ?? '';
-    const flags = flagsStr.trim() ? flagsStr.trim().split(/\s+/) : [];
-
-    // Try to replace the stream in the running mpv instance via IPC
-    const replaced = await mpvCommand(['loadfile', url, 'replace']);
-    if (replaced) {
-      logInfo('[mpv] replaced stream via IPC');
-      return;
+    const player = (db.prepare('SELECT value FROM settings WHERE key = ?').get('video_player') as { value: string } | undefined)?.value || 'mpv';
+    if (player === 'vlc') {
+      playVlc(url);
+    } else {
+      await playMpv(url);
     }
-
-    // mpv not running or IPC failed — spawn a new instance.
-    // '--' stops option parsing so a stream URL starting with '-' can't inject mpv options.
-    await stopMpv();
-    const args = [...flags, '--input-ipc-server=' + mpvSocketPath(), '--', url];
-    logInfo('[mpv]', args.join(' '));
-    mpvChild = spawn('mpv', args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    mpvChild.stdout?.on('data', (d) => {
-      // mpv outputs playback status lines like "AV: 00:00:13 / 00:00:32 (41%)..."
-      // multiple times per second. Filter them out to avoid flooding the logs.
-      const lines = d.toString().split(/\r?\n|\r/).map((l: string) => l.trim()).filter(Boolean);
-      for (const line of lines) {
-        if (!/^(AV:|\s*\(Paused\) AV:)/.test(line)) {
-          logInfo('[mpv:stdout]', line);
-        }
-      }
-    });
-    mpvChild.stderr?.on('data', (d) => logWarn('[mpv:stderr]', d.toString().trimEnd()));
-    mpvChild.on('error', (e) => logError('[mpv:spawn]', e.message));
-    mpvChild.on('exit', (code, signal) => logInfo('[mpv:exit]', `code=${code} signal=${signal ?? 'none'}`));
-    mpvChild.unref();
   });
 
   // History
