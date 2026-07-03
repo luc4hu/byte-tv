@@ -45,6 +45,7 @@ export default function MainView({
   const gridRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [visibleCount, setVisibleCount] = useState(RENDER_BATCH_SIZE);
+  const [loadingUrl, setLoadingUrl] = useState<string | null>(null);
 
   const { allCategories, channelNamesLower, categoryNamesLower } = useMemo(() => {
     const channelNamesLower = allChannels.map(ch => searchNormalize(ch.name));
@@ -161,29 +162,39 @@ export default function MainView({
     return { items: channels!, totalCount, elapsed, renderMode: 'channels' as const };
   }, [allChannels, allCategories, channelNamesLower, categoryNamesLower, favouriteUrls, historyUrls, viewMode, drillCategory, searchQuery]);
 
+  // Reset only when the query identity changes — never on `items` reference
+  // changes, since favourite/history updates rebuild the array and would
+  // collapse the list back to one batch mid-scroll.
   useLayoutEffect(() => {
     setVisibleCount(RENDER_BATCH_SIZE);
-  }, [viewMode, drillCategory, searchQuery, items]);
+    setLoadingUrl(null);
+    gridRef.current?.closest('main')?.scrollTo({ top: 0 });
+  }, [viewMode, drillCategory, searchQuery, allChannels]);
 
   const visibleItems = items.slice(0, visibleCount);
   const hasMore = visibleCount < totalCount;
 
+  const totalCountRef = useRef(totalCount);
+  totalCountRef.current = totalCount;
+
+  // Re-created per batch: a fresh observe() always delivers an initial entry,
+  // so loading chains when a new batch still leaves the sentinel within the
+  // rootMargin instead of stalling until the next scroll.
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    const scrollRoot = gridRef.current?.closest('main') ?? null;
     if (!sentinel || !hasMore) return;
 
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some(entry => entry.isIntersecting)) return;
-      setVisibleCount(prev => Math.min(prev + RENDER_BATCH_SIZE, totalCount));
+      setVisibleCount(prev => Math.min(prev + RENDER_BATCH_SIZE, totalCountRef.current));
     }, {
-      root: scrollRoot,
+      root: gridRef.current?.closest('main') ?? null,
       rootMargin: '1200px 0px',
     });
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasMore, totalCount]);
+  }, [hasMore, visibleCount]);
 
   useEffect(() => {
     const renderedCount = Math.min(visibleCount, totalCount);
@@ -201,8 +212,7 @@ export default function MainView({
 
     const card = target.closest('.channel-card') as HTMLElement | null;
     if (card?.dataset.url) {
-      gridRef.current?.querySelector('.channel-card.loading')?.classList.remove('loading');
-      card.classList.add('loading');
+      setLoadingUrl(card.dataset.url);
       onPlayChannel(card.dataset.url, viewMode === 'history');
     }
   }, [setDrillCategory, onPlayChannel, viewMode]);
@@ -253,10 +263,15 @@ export default function MainView({
                 <span className="category-count">{cat.count} ch.</span>
               </div>
             ))
-          : (visibleItems as Channel[]).map((ch, i) => {
+          : (visibleItems as Channel[]).map(ch => {
               const name = displayName(ch);
               return (
-                <div key={`${ch.id}-${i}`} className="channel-card" data-url={ch.stream_url} title={name}>
+                <div
+                  key={ch.id}
+                  className={`channel-card${loadingUrl === ch.stream_url ? ' loading' : ''}`}
+                  data-url={ch.stream_url}
+                  title={name}
+                >
                   {favouriteUrls.has(ch.stream_url) && <span className="favourite-star">&#9733;</span>}
                   <div className="channel-logo">
                     <img
