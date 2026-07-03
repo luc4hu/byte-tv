@@ -6,6 +6,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import started from 'electron-squirrel-startup';
 import { runMigrations } from './migrations';
+import type { StreamCheckResult } from './types';
 import {
   logInfo,
   logWarn,
@@ -243,6 +244,9 @@ function remapStreamUrlReferences(oldByStreamId: Map<string, string>, channels: 
 
 let db: DatabaseSync;
 let mpvChild: ChildProcess | null = null;
+let streamCheckActive = false;
+let streamCheckCancelled = false;
+let streamCheckChild: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
 let logsWindow: BrowserWindow | null = null;
 
@@ -356,6 +360,131 @@ function playVlc(url: string) {
   child.on('error', (e) => logError('[vlc:spawn]', e.message));
   child.on('exit', (code, signal) => logInfo('[vlc:exit]', `code=${code} signal=${signal ?? 'none'}`));
   child.unref();
+}
+
+interface ProcResult {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}
+
+// Spawn a short-lived process, buffer its output, and resolve when it exits.
+// Unlike the mpv/vlc spawns this child is managed: it's tracked in
+// streamCheckChild so cancel/quit can kill it, and SIGKILLed after killAfterMs
+// (ffmpeg ignores SIGTERM while blocked in a network read).
+function runCheckProcess(cmd: string, args: string[], killAfterMs: number): Promise<ProcResult> {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    streamCheckChild = child;
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let settled = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, killAfterMs);
+    child.stdout?.on('data', (d) => { stdout += d; });
+    child.stderr?.on('data', (d) => { stderr += d; });
+    // 'error' (e.g. ENOENT) is not followed by 'close' when the spawn itself
+    // failed, hence the settled guard covering both paths.
+    const finish = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (streamCheckChild === child) streamCheckChild = null;
+      logDebug('[streamcheck:proc]', `${cmd} exit code=${code ?? 'spawn-failed'}${timedOut ? ' (killed: timeout)' : ''} in ${Date.now() - t0}ms`);
+      resolve({ code, stdout, stderr, timedOut });
+    };
+    child.on('error', () => finish(null));
+    child.on('close', finish);
+  });
+}
+
+interface StreamBanner {
+  width: number;
+  height: number;
+  fps?: number;
+}
+
+// ffmpeg has no ffprobe-style structured output, but at loglevel 'info' it
+// prints an "Input #0 ... / Stream #0:0: Video: ..., WxH ..., FF fps, ..."
+// banner before decoding starts. Undocumented/unversioned (unlike ffprobe's
+// JSON), but stable in practice and lets one ffmpeg call replace ffprobe +
+// ffmpeg entirely. The banner repeats for the (remuxed) output stream, which
+// is distinguished by an always-present "q=" (encoder quantizer range) — take
+// the first Video line that lacks it.
+function parseStreamBanner(stderr: string): StreamBanner | null {
+  const inputSection = stderr.split(/\r?\nOutput #\d+/)[0];
+  for (const line of inputSection.split(/\r?\n/)) {
+    if (!/Stream #\d+:\d+.*Video:/.test(line) || line.includes('q=')) continue;
+    // {2,5} digits excludes the mpegts PID marker some inputs prepend, e.g.
+    // "Stream #0:0[0x100]: Video: ..." — "0x100" would otherwise match first.
+    const dims = line.match(/(\d{2,5})x(\d{2,5})/);
+    if (!dims) continue;
+    const fpsMatch = line.match(/([\d.]+)\s*fps/);
+    return { width: Number(dims[1]), height: Number(dims[2]), fps: fpsMatch ? Number(fpsMatch[1]) : undefined };
+  }
+  return null;
+}
+
+// One ffmpeg call does the whole check: read the stream banner for
+// resolution/fps, then decode a handful of frames and check whether the
+// picture is a uniform black/gray screen. signalstats YLOW/YHIGH are the
+// 10th/90th-percentile luma per frame: a dead feed has a tiny spread even
+// with compression noise, real content is well above 10.
+async function checkStream(url: string): Promise<StreamCheckResult> {
+  // ffmpeg has no '--' end-of-options terminator, so refuse anything that
+  // isn't plainly http(s) — this is the option-injection guard.
+  if (!/^https?:\/\//i.test(url)) return { streamUrl: url, status: 'offline', error: 'unsupported url' };
+  const args = [
+    '-hide_banner', '-v', 'info', '-nostats',
+    '-rw_timeout', '4000000',
+    '-analyzeduration', '3000000',
+    '-probesize', '5000000',
+    // Deblocking only improves visual quality, which is irrelevant to a
+    // stats-only check — skipping it cuts decode cost for free.
+    '-skip_loop_filter', 'all',
+    '-i', url,
+    '-map', '0:v:0', '-an', '-sn', '-dn',
+    '-frames:v', '5',
+    // Downscale before signalstats: decode cost is fixed (the encoded frame
+    // must be fully decoded regardless), but signalstats scans every pixel,
+    // so shrinking first cuts that cost with no measurable loss of accuracy
+    // (verified against real detailed content and a blank feed down to 80px;
+    // below ~320px timing stops improving and can even regress).
+    '-vf', 'scale=640:-2,signalstats,metadata=mode=print:file=-',
+    '-f', 'null', '-',
+  ];
+  const t0 = Date.now();
+  const res = await runCheckProcess('ffmpeg', args, 30_000);
+  const ms = Date.now() - t0;
+  let result: StreamCheckResult;
+  if (res.timedOut) {
+    result = { streamUrl: url, status: 'offline', error: 'timeout' };
+  } else if (res.code !== 0) {
+    result = { streamUrl: url, status: 'offline', error: `ffmpeg exit ${res.code ?? 'spawn-failed'}` };
+  } else {
+    const banner = parseStreamBanner(res.stderr);
+    if (!banner) {
+      result = { streamUrl: url, status: 'offline', error: 'no video stream' };
+    } else {
+      const lows: number[] = [];
+      const highs: number[] = [];
+      for (const m of res.stdout.matchAll(/lavfi\.signalstats\.(YLOW|YHIGH)=([\d.]+)/g)) {
+        (m[1] === 'YLOW' ? lows : highs).push(Number(m[2]));
+      }
+      const frames = Math.min(lows.length, highs.length);
+      const blank = frames > 0
+        ? Array.from({ length: frames }, (_, i) => highs[i] - lows[i]).every(spread => spread <= 10)
+        : true; // connected and decoded nothing usable — treat as blank, not a false "ok"
+      result = { streamUrl: url, status: blank ? 'blank' : 'ok', width: banner.width, height: banner.height, fps: banner.fps };
+    }
+  }
+  logInfo('[streamcheck]', `${url} -> ${result.status}${result.height ? ` ${result.height}p${result.fps ? ' ' + Math.round(result.fps) + 'fps' : ''}` : ''}${result.error ? ` (${result.error})` : ''} in ${ms}ms`);
+  return result;
 }
 
 function initDB() {
@@ -674,6 +803,37 @@ function registerIPC() {
     }
   });
 
+  // Stream check
+  ipcMain.handle('streamcheck:run', async (event, urls: string[]) => {
+    if (streamCheckActive) throw new Error('A stream check is already running');
+    streamCheckActive = true;
+    streamCheckCancelled = false;
+    const t0 = Date.now();
+    logInfo('[streamcheck]', `run started: ${urls.length} channel${urls.length === 1 ? '' : 's'}`);
+    const sender = event.sender;
+    const push = (r: StreamCheckResult) => {
+      if (!sender.isDestroyed()) sender.send('streamcheck:result', r);
+    };
+    let done = 0;
+    try {
+      for (const url of urls) {
+        if (streamCheckCancelled || sender.isDestroyed()) break;
+        push({ streamUrl: url, status: 'checking' });
+        push(await checkStream(url));
+        done++;
+      }
+    } finally {
+      streamCheckActive = false;
+      streamCheckChild = null;
+      logInfo('[streamcheck]', `run finished: ${done}/${urls.length} checked in ${Date.now() - t0}ms${streamCheckCancelled ? ' (cancelled)' : ''}`);
+    }
+  });
+
+  ipcMain.handle('streamcheck:cancel', () => {
+    streamCheckCancelled = true;
+    streamCheckChild?.kill('SIGKILL');
+  });
+
   // Logging
   ipcMain.handle('logs:get', () => getLogs());
   ipcMain.handle('logs:clear', () => clearLogs());
@@ -803,6 +963,10 @@ let mpvShutdownDone = false;
 app.on('before-quit', (event) => {
   if (mpvShutdownDone) return;
   event.preventDefault();
+  // ffprobe/ffmpeg children aren't detached but would still outlive the parent
+  // on Linux — kill any in-flight check explicitly.
+  streamCheckCancelled = true;
+  streamCheckChild?.kill('SIGKILL');
   (async () => {
     // Try graceful IPC shutdown first, then fall back to kill
     const sent = await mpvCommand(['quit']).catch(() => false);

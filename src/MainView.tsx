@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
-import type { Channel, Category, ViewMode } from './types';
+import type { Channel, Category, ViewMode, StreamCheckResult } from './types';
 
 const RENDER_BATCH_SIZE = 200;
 const SUPERSCRIPT_RE = /[\u00AA\u00B2\u00B3\u00B9\u00BA\u02B0-\u02FF\u1D2C-\u1D6A\u1D78\u1D9B-\u1DBF\u2070-\u207F]/g;
@@ -15,6 +15,21 @@ function searchNormalize(s: string): string {
   return s.normalize('NFKD').toLowerCase();
 }
 
+function checkBadgeLabel(r: StreamCheckResult): string {
+  if (r.status === 'offline') return 'OFF';
+  if (r.status === 'blank') return 'BLANK';
+  return r.fps ? `${r.height}p ${Math.round(r.fps)}fps` : `${r.height}p`;
+}
+
+// Badge color is by resolution tier for healthy streams, and a single
+// error color for blank/offline regardless of resolution.
+function checkBadgeColorClass(r: StreamCheckResult): string {
+  if (r.status === 'offline' || r.status === 'blank') return 'error';
+  if (r.height && r.height >= 2160) return 'uhd';
+  if (r.height && r.height >= 1080) return 'hd';
+  return 'sd';
+}
+
 interface MainViewProps {
   allChannels: Channel[];
   favouriteUrls: Set<string>;
@@ -23,7 +38,12 @@ interface MainViewProps {
   searchQuery: string;
   stripSuperscript: boolean;
   drillCategory: string | null;
+  markedUrls: Set<string>;
+  checkResults: Map<string, StreamCheckResult>;
+  bestUrls: Set<string>;
   setDrillCategory: (cat: string | null) => void;
+  onToggleMarked: (streamUrl: string) => void;
+  onVisibleChannels: (urls: string[]) => void;
   onToggleFavourite: (streamUrl: string) => void;
   onPlayChannel: (url: string, skipHistory?: boolean) => void;
   onDebugText: (text: string) => void;
@@ -37,7 +57,12 @@ export default function MainView({
   searchQuery,
   stripSuperscript,
   drillCategory,
+  markedUrls,
+  checkResults,
+  bestUrls,
   setDrillCategory,
+  onToggleMarked,
+  onVisibleChannels,
   onToggleFavourite,
   onPlayChannel,
   onDebugText,
@@ -201,6 +226,13 @@ export default function MainView({
     onDebugText(`${renderedCount} / ${totalCount} results in ${elapsed.toFixed(1)}ms`);
   }, [visibleCount, totalCount, elapsed, onDebugText]);
 
+  // Report the currently found channels up for the check-all fallback; cleared
+  // on unmount (settings open) so the toolbar button can't target a stale list.
+  useEffect(() => {
+    onVisibleChannels(renderMode === 'channels' ? (items as Channel[]).map(ch => ch.stream_url) : []);
+    return () => onVisibleChannels([]);
+  }, [items, renderMode, onVisibleChannels]);
+
   const handleGridClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
 
@@ -223,6 +255,21 @@ export default function MainView({
     if (!card?.dataset.url) return;
     onToggleFavourite(card.dataset.url);
   }, [onToggleFavourite]);
+
+  // Middle click marks a channel for the stream checker. auxclick also fires
+  // for the right button, which contextmenu owns — hence the button guard.
+  const handleAuxClick = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 1) return;
+    e.preventDefault();
+    const card = (e.target as HTMLElement).closest('.channel-card') as HTMLElement | null;
+    if (card?.dataset.url) onToggleMarked(card.dataset.url);
+  }, [onToggleMarked]);
+
+  // Middle-click autoscroll is armed at mousedown time, so it can only be
+  // suppressed here, not in auxclick.
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button === 1) e.preventDefault();
+  }, []);
 
   const displayName = (ch: Channel) =>
     stripSuperscript && viewMode === 'favourites' ? stripSuperscripts(ch.name) : ch.name;
@@ -255,6 +302,8 @@ export default function MainView({
         ref={gridRef}
         onClick={handleGridClick}
         onContextMenu={handleContextMenu}
+        onAuxClick={handleAuxClick}
+        onMouseDown={handleMouseDown}
       >
         {renderMode === 'categories'
           ? (visibleItems as Category[]).map(cat => (
@@ -265,10 +314,16 @@ export default function MainView({
             ))
           : (visibleItems as Channel[]).map(ch => {
               const name = displayName(ch);
+              const res = checkResults.get(ch.stream_url);
+              const classes = ['channel-card'];
+              if (loadingUrl === ch.stream_url) classes.push('loading');
+              if (markedUrls.has(ch.stream_url)) classes.push('marked');
+              if (res?.status === 'checking') classes.push('checking');
+              if (res?.status === 'ok' && bestUrls.has(ch.stream_url)) classes.push('best');
               return (
                 <div
                   key={ch.id}
-                  className={`channel-card${loadingUrl === ch.stream_url ? ' loading' : ''}`}
+                  className={classes.join(' ')}
                   data-url={ch.stream_url}
                   title={name}
                 >
@@ -287,6 +342,9 @@ export default function MainView({
                   </div>
                   <div className="channel-name">{name}</div>
                   {ch.playlist_name && <div className="channel-playlist">{ch.playlist_name}</div>}
+                  {res && res.status !== 'pending' && res.status !== 'checking' && (
+                    <span className={`check-badge ${checkBadgeColorClass(res)}`}>{checkBadgeLabel(res)}</span>
+                  )}
                 </div>
               );
             })

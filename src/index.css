@@ -172,8 +172,10 @@ body {
   flex-shrink: 0;
 }
 
-/* Settings gear button */
-#settings-toggle {
+/* Toolbar icon buttons (settings gear, stream check) */
+#settings-toggle,
+#check-start,
+#check-clear {
   background: none;
   border: none;
   padding: 8px;
@@ -187,9 +189,42 @@ body {
 }
 
 #settings-toggle:hover,
-#settings-toggle.active {
+#settings-toggle.active,
+#check-start:hover:not(:disabled),
+#check-clear:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-main);
+}
+
+#check-start {
+  position: relative;
+}
+
+#check-start:disabled,
+#check-clear:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.check-count {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 4px;
+  background: #3b82f6;
+  color: #fff;
+  border-radius: 8px;
+}
+
+#check-progress {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 main {
@@ -236,6 +271,20 @@ main {
 
 .channel-card:hover {
   border-color: var(--border-hover);
+}
+
+/* Same specificity as :hover — source order below makes these borders win.
+   .best comes after .marked so the winner's green beats the queued blue. */
+.channel-card.marked {
+  border-color: #3b82f6;
+}
+
+.channel-card.checking {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.channel-card.best {
+  border-color: #22c55e;
 }
 
 .channel-card.loading {
@@ -297,6 +346,39 @@ main {
   position: absolute;
   bottom: 4px;
   right: 6px;
+}
+
+/* Stream check result — bottom-left, clear of .favourite-star (top-right)
+   and .channel-playlist (bottom-right) */
+.check-badge {
+  position: absolute;
+  bottom: 4px;
+  left: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: var(--bg-badge);
+  pointer-events: none;
+}
+
+.check-badge.uhd {
+  color: #3b82f6;
+}
+
+.check-badge.hd {
+  color: #22c55e;
+}
+
+.check-badge.sd {
+  color: #f97316;
+}
+
+.check-badge.error {
+  color: #ef4444;
 }
 
 .category-card {

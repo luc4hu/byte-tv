@@ -58,6 +58,17 @@ export interface RefreshProgress {
   percent?: number; // 0-100, only during downloading phase when Content-Length is known
 }
 
+export type StreamCheckStatus = 'pending' | 'checking' | 'ok' | 'offline' | 'blank';
+
+export interface StreamCheckResult {
+  streamUrl: string;
+  status: StreamCheckStatus;
+  width?: number;   // set when status === 'ok'
+  height?: number;
+  fps?: number;     // may be undefined even when ok (streams reporting 0/0 frame rates)
+  error?: string;   // short reason for offline
+}
+
 declare global {
   interface Window {
     electronAPI: {
@@ -75,6 +86,9 @@ declare global {
       getHistory: () => Promise<string[]>;
       getFavourites: () => Promise<string[]>;
       toggleFavourite: (streamUrl: string) => Promise<{ isFavourite: boolean }>;
+      runStreamCheck: (urls: string[]) => Promise<void>;
+      cancelStreamCheck: () => Promise<void>;
+      onStreamCheckResult: (callback: (result: StreamCheckResult) => void) => () => void;
       getSetting: (key: string) => Promise<string>;
       setSetting: (key: string, value: string) => Promise<void>;
       getLogs: () => Promise<LogEntry[]>;

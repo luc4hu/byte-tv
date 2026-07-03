@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import type { Channel, ViewMode } from './types';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import type { Channel, ViewMode, StreamCheckResult } from './types';
 import MainView from './MainView';
 import SettingsView from './SettingsView';
 
@@ -10,6 +10,12 @@ function initTheme() {
 export default function App() {
   const [allChannels, setAllChannels] = useState<Channel[]>([]);
   const [favouriteUrls, setFavouriteUrls] = useState<Set<string>>(new Set());
+  const [markedUrls, setMarkedUrls] = useState<Set<string>>(new Set());
+  const [checkResults, setCheckResults] = useState<Map<string, StreamCheckResult>>(new Map());
+  const [checking, setChecking] = useState(false);
+  // Channels currently found/filtered in MainView — the fallback check target
+  // when nothing is marked. Empty while settings are open (MainView unmounted).
+  const [visibleUrls, setVisibleUrls] = useState<string[]>([]);
   const [historyUrls, setHistoryUrls] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('channels');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -47,6 +53,12 @@ export default function App() {
     initTheme();
     loadChannels();
   }, [loadChannels]);
+
+  useEffect(() => {
+    return window.electronAPI.onStreamCheckResult(r => {
+      setCheckResults(prev => new Map(prev).set(r.streamUrl, r));
+    });
+  }, []);
 
   // "/" to focus search, Tab to cycle views
   useEffect(() => {
@@ -118,6 +130,67 @@ export default function App() {
     });
   }, []);
 
+  const handleToggleMarked = useCallback((streamUrl: string) => {
+    setMarkedUrls(prev => {
+      const next = new Set(prev);
+      if (next.has(streamUrl)) {
+        next.delete(streamUrl);
+      } else {
+        next.add(streamUrl);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleStartCheck = useCallback(async () => {
+    // Marked channels take priority; with none marked, check everything
+    // currently found in the view. Dedupe — playlists can share stream URLs.
+    const live = new Set(allChannels.map(ch => ch.stream_url));
+    const urls = markedUrls.size > 0
+      ? [...markedUrls].filter(u => live.has(u))
+      : [...new Set(visibleUrls)];
+    if (urls.length === 0) return;
+    setChecking(true);
+    setCheckResults(new Map(urls.map(u => [u, { streamUrl: u, status: 'pending' as const }])));
+    try {
+      await window.electronAPI.runStreamCheck(urls);
+    } catch (e) {
+      window.electronAPI.logFromRenderer('error', `streamcheck: ${String(e)}`);
+    } finally {
+      setChecking(false);
+      // Drop entries left pending/checking by a cancel mid-run
+      setCheckResults(prev => new Map([...prev].filter(([, r]) => r.status !== 'pending' && r.status !== 'checking')));
+    }
+  }, [markedUrls, allChannels, visibleUrls]);
+
+  const handleCancelCheck = useCallback(() => {
+    window.electronAPI.cancelStreamCheck();
+  }, []);
+
+  const handleClearCheck = useCallback(() => {
+    setMarkedUrls(new Set());
+    setCheckResults(new Map());
+  }, []);
+
+  const bestUrls = useMemo(() => {
+    let bestH = 0;
+    let bestF = 0;
+    for (const r of checkResults.values()) {
+      if (r.status !== 'ok' || !r.height) continue;
+      if (r.height > bestH || (r.height === bestH && (r.fps ?? 0) > bestF)) {
+        bestH = r.height;
+        bestF = r.fps ?? 0;
+      }
+    }
+    const best = new Set<string>();
+    if (bestH > 0) {
+      for (const r of checkResults.values()) {
+        if (r.status === 'ok' && r.height === bestH && (r.fps ?? 0) === bestF) best.add(r.streamUrl);
+      }
+    }
+    return best;
+  }, [checkResults]);
+
   const handlePlayChannel = useCallback((streamUrl: string, skipHistory = false) => {
     window.electronAPI.playChannel(streamUrl, skipHistory);
     if (!skipHistory) {
@@ -186,6 +259,48 @@ export default function App() {
         </div>
         <div className="nav-right">
           <span id="debug-timer">{debugText}</span>
+          {checking && (
+            <span id="check-progress">
+              {[...checkResults.values()].filter(r => r.status !== 'pending' && r.status !== 'checking').length}
+              /{checkResults.size}
+            </span>
+          )}
+          <button
+            id="check-start"
+            title={
+              checking
+                ? 'Stop checking'
+                : markedUrls.size > 0
+                  ? `Check ${markedUrls.size} marked stream${markedUrls.size === 1 ? '' : 's'}`
+                  : `Check ${new Set(visibleUrls).size} visible channels`
+            }
+            disabled={!checking && markedUrls.size === 0 && visibleUrls.length === 0}
+            onClick={checking ? handleCancelCheck : handleStartCheck}
+          >
+            {checking ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="6" y="6" width="12" height="12" />
+              </svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="6 3 20 12 6 21 6 3" />
+              </svg>
+            )}
+            {!checking && markedUrls.size > 0 && <span className="check-count">{markedUrls.size}</span>}
+          </button>
+          {(markedUrls.size > 0 || checkResults.size > 0) && (
+            <button
+              id="check-clear"
+              title="Clear marks and results"
+              disabled={checking}
+              onClick={handleClearCheck}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
           <button
             id="settings-toggle"
             title="Settings"
@@ -216,6 +331,11 @@ export default function App() {
             stripSuperscript={stripSuperscript}
             drillCategory={drillCategory}
             setDrillCategory={handleDrillCategory}
+            markedUrls={markedUrls}
+            checkResults={checkResults}
+            bestUrls={bestUrls}
+            onToggleMarked={handleToggleMarked}
+            onVisibleChannels={setVisibleUrls}
             onToggleFavourite={handleToggleFavourite}
             onPlayChannel={handlePlayChannel}
             onDebugText={setDebugText}
