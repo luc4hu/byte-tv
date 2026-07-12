@@ -476,7 +476,7 @@ async function checkStream(url: string): Promise<StreamCheckResult> {
   if (!/^https?:\/\//i.test(url)) return { streamUrl: url, status: 'offline', error: 'unsupported url' };
   const args = [
     '-hide_banner', '-v', 'info', '-nostats',
-    '-rw_timeout', '4000000',
+    '-rw_timeout', '2500000',
     '-analyzeduration', '3000000',
     '-probesize', '5000000',
     // Deblocking only improves visual quality, which is irrelevant to a
