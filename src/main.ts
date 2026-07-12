@@ -154,30 +154,32 @@ async function fetchXtreamChannels(
 ): Promise<{ channels: Channel[]; expDate: string }> {
   const base = serverUrl.replace(/\/+$/, '');
   const apiUrl = `${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
-  let t: number;
 
-  // Authenticate
-  t = Date.now();
-  const authRes = await net.fetch(apiUrl);
+  // Fire all three requests concurrently — they are independent, and the
+  // categories/streams responses are only consumed after auth has been
+  // validated. This hides the auth round-trip behind the big streams download
+  // (worth 75–300ms per refresh); the only cost is wasted bandwidth in the
+  // failed-auth case.
+  let t = Date.now();
+  const [authRes, catRes, streamRes] = await Promise.all([
+    net.fetch(apiUrl),
+    net.fetch(`${apiUrl}&action=get_live_categories`),
+    net.fetch(`${apiUrl}&action=get_live_streams`),
+  ]);
+  logDebug(`[xtream:fetch] auth+categories+streams HTTP done in ${Date.now() - t}ms`);
+
+  // Report auth problems first — with bad credentials the other two requests
+  // fail too, but "authentication failed" is the actionable error.
   if (!authRes.ok) throw new Error(`Xtream server error: ${authRes.status}`);
   const auth = (await authRes.json()) as XtreamAuthResponse;
   if (auth.user_info?.auth !== 1) {
     throw new Error('Xtream authentication failed: invalid credentials or account inactive');
   }
-  logDebug(`[xtream:auth] request+parse done in ${Date.now() - t}ms`);
 
   const expDate = auth.user_info?.exp_date ?? '';
 
-  // Fetch categories and streams concurrently — they are independent
-  t = Date.now();
-  const [catRes, streamRes] = await Promise.all([
-    net.fetch(`${apiUrl}&action=get_live_categories`),
-    net.fetch(`${apiUrl}&action=get_live_streams`),
-  ]);
-
   if (!catRes.ok) throw new Error(`Failed to fetch categories: ${catRes.status}`);
   if (!streamRes.ok) throw new Error(`Failed to fetch streams: ${streamRes.status}`);
-  logDebug(`[xtream:fetch] categories+streams HTTP done in ${Date.now() - t}ms`);
 
   t = Date.now();
   const [categories, streams] = await Promise.all([
@@ -239,6 +241,39 @@ function remapStreamUrlReferences(oldByStreamId: Map<string, string>, channels: 
       upsertHistory.run(ch.streamUrl, history.last_played);
       deleteHistory.run(oldUrl);
     }
+  }
+}
+
+// Insert channels 100 rows per statement — measured ~2x faster than one
+// .run() per row for 55k-channel playlists (per-statement overhead dominates).
+const INSERT_BATCH_ROWS = 100;
+
+function insertChannels(channels: Channel[], playlistId: number) {
+  let i = 0;
+  if (channels.length >= INSERT_BATCH_ROWS) {
+    const batch = db.prepare(
+      `INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES ${new Array(INSERT_BATCH_ROWS).fill('(?, ?, ?, ?, ?)').join(', ')}`
+    );
+    const params = new Array(INSERT_BATCH_ROWS * 5);
+    for (; i + INSERT_BATCH_ROWS <= channels.length; i += INSERT_BATCH_ROWS) {
+      for (let j = 0; j < INSERT_BATCH_ROWS; j++) {
+        const ch = channels[i + j];
+        const o = j * 5;
+        params[o] = ch.name;
+        params[o + 1] = ch.logo;
+        params[o + 2] = ch.groupTitle;
+        params[o + 3] = ch.streamUrl;
+        params[o + 4] = playlistId;
+      }
+      batch.run(...params);
+    }
+  }
+  const single = db.prepare(
+    'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
+  );
+  for (; i < channels.length; i++) {
+    const ch = channels[i];
+    single.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
   }
 }
 
@@ -518,12 +553,7 @@ function registerIPC() {
       db.prepare("INSERT INTO playlists (name, path, last_refreshed) VALUES (?, ?, datetime('now'))").run(name, url);
       const playlistId = (db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }).id;
 
-      const insert = db.prepare(
-        'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
-      );
-      for (const ch of channels) {
-        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
-      }
+      insertChannels(channels, playlistId);
       db.exec('COMMIT');
       logInfo(`[import:url] inserted ${channels.length} rows in ${Date.now() - t2}ms`);
       logInfo(`[import:url] total: ${Date.now() - t0}ms`);
@@ -553,12 +583,7 @@ function registerIPC() {
       logDebug(`[import:xtream] playlist row inserted in ${Date.now() - t_pl}ms`);
 
       const t_ins = Date.now();
-      const insert = db.prepare(
-        'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
-      );
-      for (const ch of channels) {
-        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
-      }
+      insertChannels(channels, playlistId);
       logDebug(`[import:xtream] inserted ${channels.length} channel rows in ${Date.now() - t_ins}ms`);
 
       const t_commit = Date.now();
@@ -625,12 +650,7 @@ function registerIPC() {
       logDebug(`[update:xtream:${playlist.name}] delete old channels in ${Date.now() - t_del}ms`);
 
       const t_ins = Date.now();
-      const insert = db.prepare(
-        'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
-      );
-      for (const ch of channels) {
-        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
-      }
+      insertChannels(channels, playlistId);
       logDebug(`[update:xtream:${playlist.name}] inserted ${channels.length} channels in ${Date.now() - t_ins}ms`);
 
       const t_remap = Date.now();
@@ -717,12 +737,7 @@ function registerIPC() {
       logDebug(`[refresh:${playlist.name}] delete old channels in ${Date.now() - t_del}ms`);
 
       const t_ins = Date.now();
-      const insert = db.prepare(
-        'INSERT INTO channels (name, logo, group_title, stream_url, playlist_id) VALUES (?, ?, ?, ?, ?)'
-      );
-      for (const ch of channels) {
-        insert.run(ch.name, ch.logo, ch.groupTitle, ch.streamUrl, playlistId);
-      }
+      insertChannels(channels, playlistId);
       logDebug(`[refresh:${playlist.name}] inserted ${channels.length} channels in ${Date.now() - t_ins}ms`);
 
       const t_upd = Date.now();
