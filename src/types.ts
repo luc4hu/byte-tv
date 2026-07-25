@@ -66,6 +66,7 @@ export interface StreamCheckResult {
   width?: number;   // set when status === 'ok'
   height?: number;
   fps?: number;     // may be undefined even when ok (streams reporting 0/0 frame rates)
+  hdr?: boolean;    // true only when the stream signals a PQ/HLG transfer; absent means SDR *or* untagged
   error?: string;   // short reason for offline
 }
 

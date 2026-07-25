@@ -18,7 +18,10 @@ function searchNormalize(s: string): string {
 function checkBadgeLabel(r: StreamCheckResult): string {
   if (r.status === 'offline') return 'OFF';
   if (r.status === 'blank') return 'BLANK';
-  return r.fps ? `${r.height}p ${Math.round(r.fps)}fps` : `${r.height}p`;
+  const parts = [`${r.height}p`];
+  if (r.fps) parts.push(`${Math.round(r.fps)}fps`);
+  if (r.hdr) parts.push('HDR');
+  return parts.join(' ');
 }
 
 // Badge color is by resolution tier for healthy streams, and a single

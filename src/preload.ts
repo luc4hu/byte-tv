@@ -32,8 +32,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Stream check
   runStreamCheck: (urls: string[]) => ipcRenderer.invoke('streamcheck:run', urls),
   cancelStreamCheck: () => ipcRenderer.invoke('streamcheck:cancel'),
-  onStreamCheckResult: (callback: (result: { streamUrl: string; status: string; width?: number; height?: number; fps?: number; error?: string }) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, result: { streamUrl: string; status: string; width?: number; height?: number; fps?: number; error?: string }) => callback(result);
+  onStreamCheckResult: (callback: (result: { streamUrl: string; status: string; width?: number; height?: number; fps?: number; hdr?: boolean; error?: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, result: { streamUrl: string; status: string; width?: number; height?: number; fps?: number; hdr?: boolean; error?: string }) => callback(result);
     ipcRenderer.on('streamcheck:result', handler);
     return () => { ipcRenderer.removeListener('streamcheck:result', handler); };
   },

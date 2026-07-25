@@ -442,6 +442,7 @@ interface StreamBanner {
   width: number;
   height: number;
   fps?: number;
+  hdr?: boolean;
 }
 
 // ffmpeg has no ffprobe-style structured output, but at loglevel 'info' it
@@ -450,7 +451,8 @@ interface StreamBanner {
 // JSON), but stable in practice and lets one ffmpeg call replace ffprobe +
 // ffmpeg entirely. The banner repeats for the (remuxed) output stream, which
 // is distinguished by an always-present "q=" (encoder quantizer range) — take
-// the first Video line that lacks it.
+// the first Video line that lacks it. The same line also carries the colour
+// tags, which is where HDR comes from.
 function parseStreamBanner(stderr: string): StreamBanner | null {
   const inputSection = stderr.split(/\r?\nOutput #\d+/)[0];
   for (const line of inputSection.split(/\r?\n/)) {
@@ -460,7 +462,18 @@ function parseStreamBanner(stderr: string): StreamBanner | null {
     const dims = line.match(/(\d{2,5})x(\d{2,5})/);
     if (!dims) continue;
     const fpsMatch = line.match(/([\d.]+)\s*fps/);
-    return { width: Number(dims[1]), height: Number(dims[2]), fps: fpsMatch ? Number(fpsMatch[1]) : undefined };
+    // Colour tags live in the pix_fmt parens, e.g. "yuv420p10le(tv,
+    // bt2020nc/bt2020/smpte2084)" — often absent entirely ("yuv420p(progressive)").
+    // Only the transfer function is conclusive: smpte2084 = PQ/HDR10,
+    // arib-std-b67 = HLG. bt2020 primaries and 10-bit depth are not used, since
+    // real feeds ship 10-bit HEVC tagged bt709 (SDR) and would false-positive.
+    const hdr = /\b(?:smpte2084|arib-std-b67)\b/.test(line);
+    return {
+      width: Number(dims[1]),
+      height: Number(dims[2]),
+      fps: fpsMatch ? Number(fpsMatch[1]) : undefined,
+      hdr: hdr || undefined,
+    };
   }
   return null;
 }
@@ -515,10 +528,10 @@ async function checkStream(url: string): Promise<StreamCheckResult> {
       const blank = frames > 0
         ? Array.from({ length: frames }, (_, i) => highs[i] - lows[i]).every(spread => spread <= 10)
         : true; // connected and decoded nothing usable — treat as blank, not a false "ok"
-      result = { streamUrl: url, status: blank ? 'blank' : 'ok', width: banner.width, height: banner.height, fps: banner.fps };
+      result = { streamUrl: url, status: blank ? 'blank' : 'ok', width: banner.width, height: banner.height, fps: banner.fps, hdr: banner.hdr };
     }
   }
-  logInfo('[streamcheck]', `${url} -> ${result.status}${result.height ? ` ${result.height}p${result.fps ? ' ' + Math.round(result.fps) + 'fps' : ''}` : ''}${result.error ? ` (${result.error})` : ''} in ${ms}ms`);
+  logInfo('[streamcheck]', `${url} -> ${result.status}${result.height ? ` ${result.height}p${result.fps ? ' ' + Math.round(result.fps) + 'fps' : ''}${result.hdr ? ' HDR' : ''}` : ''}${result.error ? ` (${result.error})` : ''} in ${ms}ms`);
   return result;
 }
 
