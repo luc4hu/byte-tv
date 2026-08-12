@@ -8,11 +8,22 @@ function stripSuperscripts(s: string): string {
   return s.replace(SUPERSCRIPT_RE, '').replace(/\s{2,}/g, ' ').trim();
 }
 
-// Search-only normalization: NFKD folds superscript/modifier-letter forms
-// (e.g. "ᵁᴴᴰ" -> "uhd", "³⁸⁴⁰" -> "3840") to their ASCII base so they match
-// plain-text tokens. No-op for plain ASCII names. Display still uses ch.name.
+// These IPA small-cap letters do not have Unicode compatibility decompositions,
+// so NFKD alone leaves e.g. "ᴜʜᴅ" unchanged. Fold the Latin forms commonly used
+// in channel names before applying the normal compatibility normalization.
+const SMALL_CAP_LATIN_FOLDS: Record<string, string> = {
+  'ᴀ': 'a', 'ʙ': 'b', 'ᴄ': 'c', 'ᴅ': 'd', 'ᴇ': 'e', 'ꜰ': 'f',
+  'ɢ': 'g', 'ʜ': 'h', 'ɪ': 'i', 'ᴊ': 'j', 'ᴋ': 'k', 'ʟ': 'l',
+  'ᴍ': 'm', 'ɴ': 'n', 'ᴏ': 'o', 'ᴘ': 'p', 'ʀ': 'r', 'ꜱ': 's',
+  'ᴛ': 't', 'ᴜ': 'u', 'ᴠ': 'v', 'ᴡ': 'w', 'ʏ': 'y', 'ᴢ': 'z',
+};
+
+// Search-only normalization makes stylized Latin and superscript/modifier-letter
+// forms match plain-text tokens. Display still uses ch.name.
 function searchNormalize(s: string): string {
-  return s.normalize('NFKD').toLowerCase();
+  return s.replace(/[ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢ]/g, char => SMALL_CAP_LATIN_FOLDS[char])
+    .normalize('NFKD')
+    .toLowerCase();
 }
 
 function checkBadgeLabel(r: StreamCheckResult): string {
