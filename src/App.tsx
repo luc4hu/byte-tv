@@ -51,7 +51,38 @@ export default function App() {
 
   useEffect(() => {
     initTheme();
-    loadChannels();
+    let cancelled = false;
+
+    const initialize = async () => {
+      // Show cached channels immediately; playlist refreshes can take a while.
+      await loadChannels();
+
+      try {
+        const autoRefresh = await window.electronAPI.getSetting('refresh_playlists_on_startup');
+        // Missing settings use the default-on behaviour.
+        if (autoRefresh === '0' || cancelled) return;
+
+        const playlists = await window.electronAPI.getPlaylists();
+        for (const playlist of playlists) {
+          if (cancelled) return;
+          try {
+            await window.electronAPI.refreshPlaylist(playlist.id);
+          } catch (e) {
+            await window.electronAPI.logFromRenderer(
+              'error',
+              `startup playlist refresh (${playlist.name}): ${String(e)}`,
+            );
+          }
+        }
+
+        if (!cancelled && playlists.length > 0) await loadChannels();
+      } catch (e) {
+        await window.electronAPI.logFromRenderer('error', `startup playlist refresh: ${String(e)}`);
+      }
+    };
+
+    void initialize();
+    return () => { cancelled = true; };
   }, [loadChannels]);
 
   useEffect(() => {

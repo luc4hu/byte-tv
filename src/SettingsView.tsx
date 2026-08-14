@@ -38,6 +38,7 @@ export default function SettingsView({
   const [videoPlayer, setVideoPlayer] = useState<'mpv' | 'vlc'>('mpv');
   const [mpvFlags, setMpvFlags] = useState('');
   const [vlcFlags, setVlcFlags] = useState('');
+  const [refreshPlaylistsOnStartup, setRefreshPlaylistsOnStartup] = useState(true);
   const [appVersion, setAppVersion] = useState('');
   
   const [showUrlInput, setShowUrlInput] = useState(false);
@@ -61,17 +62,19 @@ export default function SettingsView({
   const [editXtreamError, setEditXtreamError] = useState('');
 
   const loadSettings = useCallback(async () => {
-    const [pl, player, flags, vlc, version] = await Promise.all([
+    const [pl, player, flags, vlc, autoRefresh, version] = await Promise.all([
       window.electronAPI.getPlaylists(),
       window.electronAPI.getSetting('video_player'),
       window.electronAPI.getSetting('mpv_flags'),
       window.electronAPI.getSetting('vlc_flags'),
+      window.electronAPI.getSetting('refresh_playlists_on_startup'),
       window.electronAPI.getAppVersion(),
     ]);
     setPlaylists(pl);
     setVideoPlayer(player === 'vlc' ? 'vlc' : 'mpv');
     setMpvFlags(flags || '');
     setVlcFlags(vlc || '');
+    setRefreshPlaylistsOnStartup(autoRefresh !== '0');
     setAppVersion(version);
   }, []);
 
@@ -220,10 +223,32 @@ export default function SettingsView({
     window.electronAPI.setSetting('strip_superscript', value ? '1' : '0');
   };
 
+  const handleStartupRefreshChange = (value: boolean) => {
+    setRefreshPlaylistsOnStartup(value);
+    window.electronAPI.setSetting('refresh_playlists_on_startup', value ? '1' : '0');
+  };
+
   return (
     <div id="settings-page" style={{ display: 'block' }}>
       <div className="settings-section">
         <h2>Playlists</h2>
+        <div className="theme-setting">
+          <span>Refresh playlists on startup</span>
+          <div className="view-toggle">
+            <button
+              className={`toggle-btn${refreshPlaylistsOnStartup ? ' active' : ''}`}
+              onClick={() => handleStartupRefreshChange(true)}
+            >
+              On
+            </button>
+            <button
+              className={`toggle-btn${!refreshPlaylistsOnStartup ? ' active' : ''}`}
+              onClick={() => handleStartupRefreshChange(false)}
+            >
+              Off
+            </button>
+          </div>
+        </div>
         <div id="playlist-list">
           {playlists.length === 0 && (
             <p className="settings-empty">No playlists added yet.</p>
