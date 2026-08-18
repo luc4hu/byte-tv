@@ -20,9 +20,12 @@ const SMALL_CAP_LATIN_FOLDS: Record<string, string> = {
 
 // Search-only normalization makes stylized Latin and superscript/modifier-letter
 // forms match plain-text tokens. Display still uses ch.name.
+// NFKD splits accented letters into base + combining mark, so the marks are
+// stripped afterwards: "BARÇA" becomes "barca" rather than "barc\u0327a".
 function searchNormalize(s: string): string {
   return s.replace(/[ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢ]/g, char => SMALL_CAP_LATIN_FOLDS[char])
     .normalize('NFKD')
+    .replace(/[\u0300-\u036F]/g, '')
     .toLowerCase();
 }
 
