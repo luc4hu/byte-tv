@@ -50,6 +50,7 @@ function checkBadgeColorClass(r: StreamCheckResult): string {
 interface MainViewProps {
   allChannels: Channel[];
   favouriteUrls: Set<string>;
+  favouriteCategories: Set<string>;
   historyUrls: string[];
   viewMode: ViewMode;
   searchQuery: string;
@@ -62,6 +63,7 @@ interface MainViewProps {
   onToggleMarked: (streamUrl: string) => void;
   onVisibleChannels: (urls: string[]) => void;
   onToggleFavourite: (streamUrl: string) => void;
+  onToggleFavouriteCategory: (categoryName: string) => void;
   onPlayChannel: (url: string, skipHistory?: boolean) => void;
   onDebugText: (text: string) => void;
 }
@@ -69,6 +71,7 @@ interface MainViewProps {
 export default function MainView({
   allChannels,
   favouriteUrls,
+  favouriteCategories,
   historyUrls,
   viewMode,
   searchQuery,
@@ -81,6 +84,7 @@ export default function MainView({
   onToggleMarked,
   onVisibleChannels,
   onToggleFavourite,
+  onToggleFavouriteCategory,
   onPlayChannel,
   onDebugText,
 }: MainViewProps) {
@@ -141,6 +145,7 @@ export default function MainView({
         });
       }
     } else if (viewMode === 'favourites') {
+      const favCategories = allCategories.filter(cat => favouriteCategories.has(cat.name));
       const seen = new Set<string>();
       const favChannels = allChannels.filter(ch => {
         if (!favouriteUrls.has(ch.stream_url) || seen.has(ch.stream_url)) return false;
@@ -151,17 +156,22 @@ export default function MainView({
         if (byPlaylist !== 0) return byPlaylist;
         return a.name.localeCompare(b.name);
       });
-      if (tokens.length === 0) {
-        channels = favChannels;
-      } else {
-        channels = favChannels.filter(ch => {
+      const matchingChannels = tokens.length === 0 ? favChannels : favChannels.filter(ch => {
           const name = searchNormalize(ch.name);
           for (const tok of tokens) {
             if (!name.includes(tok)) return false;
           }
           return true;
         });
-      }
+      const matchingCategories = tokens.length === 0 ? favCategories : favCategories.filter(cat => {
+        const name = searchNormalize(cat.name);
+        for (const tok of tokens) {
+          if (!name.includes(tok)) return false;
+        }
+        return true;
+      });
+      const items = [...matchingCategories, ...matchingChannels];
+      return { items, totalCount: items.length, elapsed: performance.now() - t0, renderMode: 'favourites' as const };
     } else if (viewMode === 'channels') {
       if (tokens.length === 0) {
         channels = allChannels;
@@ -202,7 +212,7 @@ export default function MainView({
     }
     const totalCount = channels!.length;
     return { items: channels!, totalCount, elapsed, renderMode: 'channels' as const };
-  }, [allChannels, allCategories, channelNamesLower, categoryNamesLower, favouriteUrls, historyUrls, viewMode, drillCategory, searchQuery]);
+  }, [allChannels, allCategories, channelNamesLower, categoryNamesLower, favouriteUrls, favouriteCategories, historyUrls, viewMode, drillCategory, searchQuery]);
 
   // Reset only when the query identity changes — never on `items` reference
   // changes, since favourite/history updates rebuild the array and would
@@ -246,7 +256,11 @@ export default function MainView({
   // Report the currently found channels up for the check-all fallback; cleared
   // on unmount (settings open) so the toolbar button can't target a stale list.
   useEffect(() => {
-    onVisibleChannels(renderMode === 'channels' ? (items as Channel[]).map(ch => ch.stream_url) : []);
+    onVisibleChannels(renderMode === 'channels'
+      ? (items as Channel[]).map(ch => ch.stream_url)
+      : renderMode === 'favourites'
+        ? (items as Array<Category | Channel>).filter((item): item is Channel => 'stream_url' in item).map(ch => ch.stream_url)
+        : []);
     return () => onVisibleChannels([]);
   }, [items, renderMode, onVisibleChannels]);
 
@@ -268,10 +282,15 @@ export default function MainView({
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    const categoryCard = (e.target as HTMLElement).closest('.category-card') as HTMLElement | null;
+    if (categoryCard?.dataset.category) {
+      onToggleFavouriteCategory(categoryCard.dataset.category);
+      return;
+    }
     const card = (e.target as HTMLElement).closest('.channel-card') as HTMLElement | null;
     if (!card?.dataset.url) return;
     onToggleFavourite(card.dataset.url);
-  }, [onToggleFavourite]);
+  }, [onToggleFavourite, onToggleFavouriteCategory]);
 
   // Middle click marks a channel for the stream checker. auxclick also fires
   // for the right button, which contextmenu owns — hence the button guard.
@@ -298,7 +317,7 @@ export default function MainView({
       : viewMode === 'history' && !drillCategory
         ? 'No channels played yet.'
         : viewMode === 'favourites' && !drillCategory
-          ? 'No favourites yet. Right-click a channel to add one.'
+          ? 'No favourites yet. Right-click a channel or category to add one.'
           : 'Nothing here.';
 
   return (
@@ -322,11 +341,33 @@ export default function MainView({
         onAuxClick={handleAuxClick}
         onMouseDown={handleMouseDown}
       >
-        {renderMode === 'categories'
-          ? (visibleItems as Category[]).map(cat => (
-              <div key={cat.name} className="category-card" data-category={cat.name}>
-                <span className="category-name">{cat.name}</span>
-                <span className="category-count">{cat.count} ch.</span>
+        {renderMode === 'categories' || renderMode === 'favourites'
+          ? (visibleItems as Array<Category | Channel>).map(item => 'stream_url' in item ? (() => {
+              const ch = item;
+              const name = displayName(ch);
+              const res = checkResults.get(ch.stream_url);
+              const classes = ['channel-card'];
+              if (loadingUrl === ch.stream_url) classes.push('loading');
+              if (markedUrls.has(ch.stream_url)) classes.push('marked');
+              if (res?.status === 'checking') classes.push('checking');
+              if (res?.status === 'ok' && bestUrls.has(ch.stream_url)) classes.push('best');
+              return (
+                <div key={`channel-${ch.id}`} className={classes.join(' ')} data-url={ch.stream_url} title={name}>
+                  {favouriteUrls.has(ch.stream_url) && <span className="favourite-star">&#9733;</span>}
+                  <div className="channel-logo">
+                    <img src={ch.logo} alt="" loading="lazy" decoding="async" width={100} height={50} onError={e => { (e.target as HTMLImageElement).dataset.error = ''; }} />
+                    <span className="logo-fallback">{name.charAt(0)}</span>
+                  </div>
+                  <div className="channel-name">{name}</div>
+                  {ch.playlist_name && <div className="channel-playlist">{ch.playlist_name}</div>}
+                  {res && res.status !== 'pending' && res.status !== 'checking' && <span className={`check-badge ${checkBadgeColorClass(res)}`}>{checkBadgeLabel(res)}</span>}
+                </div>
+              );
+            })() : (
+              <div key={`category-${item.name}`} className="category-card" data-category={item.name}>
+                {favouriteCategories.has(item.name) && <span className="favourite-star">&#9733;</span>}
+                <span className="category-name">{item.name}</span>
+                <span className="category-count">{item.count} ch.</span>
               </div>
             ))
           : (visibleItems as Channel[]).map(ch => {

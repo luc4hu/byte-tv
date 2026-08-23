@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Favourites
   getFavourites: () => ipcRenderer.invoke('favourites:getAll'),
   toggleFavourite: (streamUrl: string) => ipcRenderer.invoke('favourites:toggle', streamUrl),
+  getFavouriteCategories: () => ipcRenderer.invoke('favourites:getCategories'),
+  toggleFavouriteCategory: (categoryName: string) => ipcRenderer.invoke('favourites:toggleCategory', categoryName),
 
   // Stream check
   runStreamCheck: (urls: string[]) => ipcRenderer.invoke('streamcheck:run', urls),

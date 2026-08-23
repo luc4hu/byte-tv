@@ -87,6 +87,8 @@ declare global {
       getHistory: () => Promise<string[]>;
       getFavourites: () => Promise<string[]>;
       toggleFavourite: (streamUrl: string) => Promise<{ isFavourite: boolean }>;
+      getFavouriteCategories: () => Promise<string[]>;
+      toggleFavouriteCategory: (categoryName: string) => Promise<{ isFavourite: boolean }>;
       runStreamCheck: (urls: string[]) => Promise<void>;
       cancelStreamCheck: () => Promise<void>;
       onStreamCheckResult: (callback: (result: StreamCheckResult) => void) => () => void;

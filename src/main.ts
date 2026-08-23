@@ -831,6 +831,22 @@ function registerIPC() {
     }
   });
 
+  ipcMain.handle('favourites:getCategories', () => {
+    const rows = db.prepare('SELECT category_name FROM favourite_categories').all() as { category_name: string }[];
+    return rows.map(r => r.category_name);
+  });
+
+  ipcMain.handle('favourites:toggleCategory', (_event, categoryName: string) => {
+    const row = db.prepare('SELECT 1 FROM favourite_categories WHERE category_name = ?').get(categoryName);
+    if (row) {
+      db.prepare('DELETE FROM favourite_categories WHERE category_name = ?').run(categoryName);
+      return { isFavourite: false };
+    } else {
+      db.prepare('INSERT INTO favourite_categories (category_name) VALUES (?)').run(categoryName);
+      return { isFavourite: true };
+    }
+  });
+
   // Stream check
   ipcMain.handle('streamcheck:run', async (event, urls: string[]) => {
     if (streamCheckActive) throw new Error('A stream check is already running');

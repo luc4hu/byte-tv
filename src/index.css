@@ -382,6 +382,7 @@ main {
 }
 
 .category-card {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -397,10 +398,16 @@ main {
 }
 
 .category-name {
+  flex: 1;
   font-size: 14px;
   font-weight: 500;
   color: var(--text-main);
   letter-spacing: -0.01em;
+}
+
+.category-card .favourite-star {
+  position: static;
+  margin-right: 8px;
 }
 
 .category-count {
@@ -786,4 +793,3 @@ main {
 .settings-row button:hover {
   background: var(--bg-active-hover);
 }
-

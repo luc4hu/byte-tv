@@ -10,6 +10,7 @@ function initTheme() {
 export default function App() {
   const [allChannels, setAllChannels] = useState<Channel[]>([]);
   const [favouriteUrls, setFavouriteUrls] = useState<Set<string>>(new Set());
+  const [favouriteCategories, setFavouriteCategories] = useState<Set<string>>(new Set());
   const [markedUrls, setMarkedUrls] = useState<Set<string>>(new Set());
   const [checkResults, setCheckResults] = useState<Map<string, StreamCheckResult>>(new Map());
   const [checking, setChecking] = useState(false);
@@ -30,9 +31,10 @@ export default function App() {
   const loadChannels = useCallback(async () => {
     try {
       const t0 = performance.now();
-      const [channels, favUrls, histUrls, stripSetting] = await Promise.all([
+      const [channels, favUrls, favCategories, histUrls, stripSetting] = await Promise.all([
         window.electronAPI.getChannels(),
         window.electronAPI.getFavourites(),
+        window.electronAPI.getFavouriteCategories(),
         window.electronAPI.getHistory(),
         window.electronAPI.getSetting('strip_superscript'),
       ]);
@@ -40,6 +42,7 @@ export default function App() {
 
       setAllChannels(channels);
       setFavouriteUrls(new Set(favUrls));
+      setFavouriteCategories(new Set(favCategories));
       setHistoryUrls(histUrls);
       setStripSuperscript(stripSetting === '1');
       setDebugText(`${channels.length} channels loaded`);
@@ -157,6 +160,16 @@ export default function App() {
       } else {
         next.delete(streamUrl);
       }
+      return next;
+    });
+  }, []);
+
+  const handleToggleFavouriteCategory = useCallback(async (categoryName: string) => {
+    const { isFavourite } = await window.electronAPI.toggleFavouriteCategory(categoryName);
+    setFavouriteCategories(prev => {
+      const next = new Set(prev);
+      if (isFavourite) next.add(categoryName);
+      else next.delete(categoryName);
       return next;
     });
   }, []);
@@ -356,6 +369,7 @@ export default function App() {
           <MainView
             allChannels={allChannels}
             favouriteUrls={favouriteUrls}
+            favouriteCategories={favouriteCategories}
             historyUrls={historyUrls}
             viewMode={viewMode}
             searchQuery={searchQuery}
@@ -368,6 +382,7 @@ export default function App() {
             onToggleMarked={handleToggleMarked}
             onVisibleChannels={setVisibleUrls}
             onToggleFavourite={handleToggleFavourite}
+            onToggleFavouriteCategory={handleToggleFavouriteCategory}
             onPlayChannel={handlePlayChannel}
             onDebugText={setDebugText}
           />

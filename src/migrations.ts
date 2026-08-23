@@ -41,7 +41,13 @@ const migrations: Array<(db: DatabaseSync) => void> = [
       value TEXT NOT NULL DEFAULT ''
     )`);
   },
-  // --- future migrations append here as v2, v3, ... ---
+  // --- v2: favourite categories, keyed by their displayed group name ---
+  (db) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS favourite_categories (
+      category_name TEXT PRIMARY KEY NOT NULL
+    )`);
+  },
+  // --- future migrations append here as v3, v4, ... ---
 ];
 
 // Applies every migration the database hasn't seen yet, each in its own
