@@ -280,17 +280,28 @@ export default function MainView({
     }
   }, [setDrillCategory, onPlayChannel, viewMode]);
 
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+  // Right-click opens a native menu with the single favourite toggle, so a
+  // stray click can't silently change anything.
+  const handleContextMenu = useCallback(async (e: React.MouseEvent) => {
     e.preventDefault();
-    const categoryCard = (e.target as HTMLElement).closest('.category-card') as HTMLElement | null;
-    if (categoryCard?.dataset.category) {
-      onToggleFavouriteCategory(categoryCard.dataset.category);
+    const target = e.target as HTMLElement;
+
+    const catCard = target.closest('.category-card') as HTMLElement | null;
+    if (catCard?.dataset.category) {
+      const name = catCard.dataset.category;
+      if (await window.electronAPI.showFavouriteMenu({ isFavourite: favouriteCategories.has(name), isCategory: true })) {
+        onToggleFavouriteCategory(name);
+      }
       return;
     }
-    const card = (e.target as HTMLElement).closest('.channel-card') as HTMLElement | null;
+
+    const card = target.closest('.channel-card') as HTMLElement | null;
     if (!card?.dataset.url) return;
-    onToggleFavourite(card.dataset.url);
-  }, [onToggleFavourite, onToggleFavouriteCategory]);
+    const url = card.dataset.url;
+    if (await window.electronAPI.showFavouriteMenu({ isFavourite: favouriteUrls.has(url) })) {
+      onToggleFavourite(url);
+    }
+  }, [favouriteUrls, favouriteCategories, onToggleFavourite, onToggleFavouriteCategory]);
 
   // Middle click marks a channel for the stream checker. auxclick also fires
   // for the right button, which contextmenu owns — hence the button guard.

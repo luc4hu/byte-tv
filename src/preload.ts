@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toggleFavourite: (streamUrl: string) => ipcRenderer.invoke('favourites:toggle', streamUrl),
   getFavouriteCategories: () => ipcRenderer.invoke('favourites:getCategories'),
   toggleFavouriteCategory: (categoryName: string) => ipcRenderer.invoke('favourites:toggleCategory', categoryName),
+  showFavouriteMenu: (opts: { isFavourite: boolean; isCategory?: boolean }) => ipcRenderer.invoke('favourites:contextMenu', opts),
 
   // Stream check
   runStreamCheck: (urls: string[]) => ipcRenderer.invoke('streamcheck:run', urls),

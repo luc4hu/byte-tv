@@ -89,6 +89,7 @@ declare global {
       toggleFavourite: (streamUrl: string) => Promise<{ isFavourite: boolean }>;
       getFavouriteCategories: () => Promise<string[]>;
       toggleFavouriteCategory: (categoryName: string) => Promise<{ isFavourite: boolean }>;
+      showFavouriteMenu: (opts: { isFavourite: boolean; isCategory?: boolean }) => Promise<boolean>;
       runStreamCheck: (urls: string[]) => Promise<void>;
       cancelStreamCheck: () => Promise<void>;
       onStreamCheckResult: (callback: (result: StreamCheckResult) => void) => () => void;

@@ -42,7 +42,7 @@ Styling in `src/index.css` uses CSS custom properties (dark theme is hardcoded v
 - **IPC protocol**: Handlers registered in `registerIPC()` in main.ts, invoked through preload bridge methods. Channel names follow `domain:action` convention (e.g., `channels:getAll`, `favourites:toggle`).
 - **Database**: Five tables — `playlists`, `channels` (FK to playlists, ON DELETE CASCADE), `favourites` (stream_url PK), `history` (stream_url PK, last_played), `settings` (key/value). DB file (`channels.db`) lives in Electron's `userData` directory. Schema is defined and versioned via migrations (see below).
 - **Search**: Client-side multi-token AND matching against pre-built lowercase name arrays. Rendered in batches of 200 via IntersectionObserver infinite scroll.
-- **Favourites**: Right-click context menu toggles. Stored as stream_url set in both SQLite and renderer memory. On Xtream refresh, favourite/history URLs are remapped by stream id (`remapStreamUrlReferences`) so credential changes don't lose them.
+- **Favourites**: Right-click pops a native one-entry menu (`favourites:contextMenu` in main.ts) whose label reflects current state; the renderer toggles only if it's chosen. The card star is a read-only indicator. Stored as stream_url set in both SQLite and renderer memory. On Xtream refresh, favourite/history URLs are remapped by stream id (`remapStreamUrlReferences`) so credential changes don't lose them.
 - **M3U parsing**: Extracts `tvg-logo`, `group-title` attributes and channel name from `#EXTINF:` lines.
 - **Playback**: Reuses a running mpv instance via `loadfile ... replace` over the IPC socket; spawns a new detached mpv otherwise. User-configurable flags come from the `mpv_flags` setting.
 

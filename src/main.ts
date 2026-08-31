@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, net, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, net, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import fs from 'node:fs';
@@ -845,6 +845,30 @@ function registerIPC() {
       db.prepare('INSERT INTO favourite_categories (category_name) VALUES (?)').run(categoryName);
       return { isFavourite: true };
     }
+  });
+
+  // Native right-click menu with the single favourite toggle. Resolves true if
+  // the entry was chosen, false if the menu was dismissed; the renderer owns
+  // the actual toggle so it stays on the existing favourites:toggle path.
+  ipcMain.handle('favourites:contextMenu', (event, opts: { isFavourite: boolean; isCategory?: boolean }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return false;
+    return new Promise<boolean>(resolve => {
+      let settled = false;
+      const done = (chosen: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(chosen);
+      };
+      const what = opts.isCategory ? 'favourite categories' : 'favourites';
+      const menu = Menu.buildFromTemplate([{
+        label: opts.isFavourite ? `Remove from ${what}` : `Add to ${what}`,
+        click: () => done(true),
+      }]);
+      // The close callback can run before the item's click handler, so the
+      // dismissal answer is deferred a tick to let a real click win.
+      menu.popup({ window: win, callback: () => setTimeout(() => done(false), 0) });
+    });
   });
 
   // Stream check
