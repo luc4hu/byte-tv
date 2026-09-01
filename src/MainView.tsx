@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
-import type { Channel, Category, ViewMode, StreamCheckResult } from './types';
+import type { Channel, Category, ViewMode, SearchMode, StreamCheckResult } from './types';
 
 const RENDER_BATCH_SIZE = 200;
 const SUPERSCRIPT_RE = /[\u00AA\u00B2\u00B3\u00B9\u00BA\u02B0-\u02FF\u1D2C-\u1D6A\u1D78\u1D9B-\u1DBF\u2070-\u207F]/g;
@@ -29,6 +29,29 @@ function searchNormalize(s: string): string {
     .toLowerCase();
 }
 
+// Builds the predicate used to filter names in every view. A null matcher means
+// "no filter" (empty query, or a query that failed to compile).
+function buildMatcher(query: string, mode: SearchMode): {
+  matcher: ((name: string) => boolean) | null;
+  regexError: string | null;
+} {
+  if (!query) return { matcher: null, regexError: null };
+  if (mode === 'regex') {
+    try {
+      // The pattern is used verbatim — searchNormalize would lowercase it and
+      // silently flip \D/\W/\S. The `i` flag covers case instead, and the names
+      // it is tested against are already normalized.
+      const re = new RegExp(query, 'i');
+      return { matcher: name => re.test(name), regexError: null };
+    } catch (e) {
+      return { matcher: null, regexError: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  const tokens = searchNormalize(query).split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { matcher: null, regexError: null };
+  return { matcher: name => tokens.every(tok => name.includes(tok)), regexError: null };
+}
+
 function checkBadgeLabel(r: StreamCheckResult): string {
   if (r.status === 'offline') return 'OFF';
   if (r.status === 'blank') return 'BLANK';
@@ -54,6 +77,7 @@ interface MainViewProps {
   historyUrls: string[];
   viewMode: ViewMode;
   searchQuery: string;
+  searchMode: SearchMode;
   stripSuperscript: boolean;
   drillCategory: string | null;
   markedUrls: Set<string>;
@@ -75,6 +99,7 @@ export default function MainView({
   historyUrls,
   viewMode,
   searchQuery,
+  searchMode,
   stripSuperscript,
   drillCategory,
   markedUrls,
@@ -105,27 +130,22 @@ export default function MainView({
     return { allCategories, channelNamesLower, categoryNamesLower };
   }, [allChannels]);
 
-  const { items, totalCount, elapsed, renderMode } = useMemo(() => {
+  const { items, totalCount, elapsed, renderMode, regexError } = useMemo(() => {
     const t0 = performance.now();
-    const q = searchNormalize(searchQuery.trim());
-    const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
+    const { matcher, regexError } = buildMatcher(searchQuery.trim(), searchMode);
+
+    // An incomplete pattern (typed mid-edit) shows the error rather than an
+    // unfiltered grid.
+    if (regexError) {
+      return { items: [], totalCount: 0, elapsed: performance.now() - t0, renderMode: 'channels' as const, regexError };
+    }
 
     let channels: Channel[] | null = null;
     let categories: Category[] | null = null;
 
     if (drillCategory) {
       const catChannels = allChannels.filter(ch => (ch.group_title || 'Uncategorized') === drillCategory);
-      if (tokens.length === 0) {
-        channels = catChannels;
-      } else {
-        channels = catChannels.filter(ch => {
-          const name = searchNormalize(ch.name);
-          for (const tok of tokens) {
-            if (!name.includes(tok)) return false;
-          }
-          return true;
-        });
-      }
+      channels = matcher ? catChannels.filter(ch => matcher(searchNormalize(ch.name))) : catChannels;
     } else if (viewMode === 'history') {
       const historyChannels: Channel[] = [];
       const channelByUrl = new Map(allChannels.map(ch => [ch.stream_url, ch]));
@@ -133,17 +153,7 @@ export default function MainView({
         const ch = channelByUrl.get(url);
         if (ch) historyChannels.push(ch);
       }
-      if (tokens.length === 0) {
-        channels = historyChannels;
-      } else {
-        channels = historyChannels.filter(ch => {
-          const name = searchNormalize(ch.name);
-          for (const tok of tokens) {
-            if (!name.includes(tok)) return false;
-          }
-          return true;
-        });
-      }
+      channels = matcher ? historyChannels.filter(ch => matcher(searchNormalize(ch.name))) : historyChannels;
     } else if (viewMode === 'favourites') {
       const favCategories = allCategories.filter(cat => favouriteCategories.has(cat.name));
       const seen = new Set<string>();
@@ -156,63 +166,25 @@ export default function MainView({
         if (byPlaylist !== 0) return byPlaylist;
         return a.name.localeCompare(b.name);
       });
-      const matchingChannels = tokens.length === 0 ? favChannels : favChannels.filter(ch => {
-          const name = searchNormalize(ch.name);
-          for (const tok of tokens) {
-            if (!name.includes(tok)) return false;
-          }
-          return true;
-        });
-      const matchingCategories = tokens.length === 0 ? favCategories : favCategories.filter(cat => {
-        const name = searchNormalize(cat.name);
-        for (const tok of tokens) {
-          if (!name.includes(tok)) return false;
-        }
-        return true;
-      });
+      const matchingChannels = matcher ? favChannels.filter(ch => matcher(searchNormalize(ch.name))) : favChannels;
+      const matchingCategories = matcher ? favCategories.filter(cat => matcher(searchNormalize(cat.name))) : favCategories;
       const items = [...matchingCategories, ...matchingChannels];
-      return { items, totalCount: items.length, elapsed: performance.now() - t0, renderMode: 'favourites' as const };
+      return { items, totalCount: items.length, elapsed: performance.now() - t0, renderMode: 'favourites' as const, regexError };
     } else if (viewMode === 'channels') {
-      if (tokens.length === 0) {
-        channels = allChannels;
-      } else if (tokens.length === 1) {
-        const tok = tokens[0];
-        channels = allChannels.filter((_, i) => channelNamesLower[i].includes(tok));
-      } else {
-        channels = allChannels.filter((_, i) => {
-          const name = channelNamesLower[i];
-          for (const tok of tokens) {
-            if (!name.includes(tok)) return false;
-          }
-          return true;
-        });
-      }
+      channels = matcher ? allChannels.filter((_, i) => matcher(channelNamesLower[i])) : allChannels;
     } else {
       // categories view
-      if (tokens.length === 0) {
-        categories = allCategories;
-      } else if (tokens.length === 1) {
-        const tok = tokens[0];
-        categories = allCategories.filter((_, i) => categoryNamesLower[i].includes(tok));
-      } else {
-        categories = allCategories.filter((_, i) => {
-          const name = categoryNamesLower[i];
-          for (const tok of tokens) {
-            if (!name.includes(tok)) return false;
-          }
-          return true;
-        });
-      }
+      categories = matcher ? allCategories.filter((_, i) => matcher(categoryNamesLower[i])) : allCategories;
     }
 
     const elapsed = performance.now() - t0;
     if (categories) {
       const totalCount = categories.length;
-      return { items: categories, totalCount, elapsed, renderMode: 'categories' as const };
+      return { items: categories, totalCount, elapsed, renderMode: 'categories' as const, regexError };
     }
     const totalCount = channels!.length;
-    return { items: channels!, totalCount, elapsed, renderMode: 'channels' as const };
-  }, [allChannels, allCategories, channelNamesLower, categoryNamesLower, favouriteUrls, favouriteCategories, historyUrls, viewMode, drillCategory, searchQuery]);
+    return { items: channels!, totalCount, elapsed, renderMode: 'channels' as const, regexError };
+  }, [allChannels, allCategories, channelNamesLower, categoryNamesLower, favouriteUrls, favouriteCategories, historyUrls, viewMode, drillCategory, searchQuery, searchMode]);
 
   // Reset only when the query identity changes — never on `items` reference
   // changes, since favourite/history updates rebuild the array and would
@@ -221,7 +193,7 @@ export default function MainView({
     setVisibleCount(RENDER_BATCH_SIZE);
     setLoadingUrl(null);
     gridRef.current?.closest('main')?.scrollTo({ top: 0 });
-  }, [viewMode, drillCategory, searchQuery, allChannels]);
+  }, [viewMode, drillCategory, searchQuery, searchMode, allChannels]);
 
   const visibleItems = items.slice(0, visibleCount);
   const hasMore = visibleCount < totalCount;
@@ -321,15 +293,17 @@ export default function MainView({
   const displayName = (ch: Channel) =>
     stripSuperscript && viewMode === 'favourites' ? stripSuperscripts(ch.name) : ch.name;
 
-  const emptyMessage = allChannels.length === 0
-    ? 'No channels loaded. Open Settings to add a playlist.'
-    : searchQuery.trim()
-      ? `No results for "${searchQuery.trim()}".`
-      : viewMode === 'history' && !drillCategory
-        ? 'No channels played yet.'
-        : viewMode === 'favourites' && !drillCategory
-          ? 'No favourites yet. Right-click a channel or category to add one.'
-          : 'Nothing here.';
+  const emptyMessage = regexError
+    ? `Invalid regex: ${regexError}`
+    : allChannels.length === 0
+      ? 'No channels loaded. Open Settings to add a playlist.'
+      : searchQuery.trim()
+        ? `No results for "${searchQuery.trim()}".`
+        : viewMode === 'history' && !drillCategory
+          ? 'No channels played yet.'
+          : viewMode === 'favourites' && !drillCategory
+            ? 'No favourites yet. Right-click a channel or category to add one.'
+            : 'Nothing here.';
 
   return (
     <>

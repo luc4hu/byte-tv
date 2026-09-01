@@ -164,6 +164,31 @@ body {
   color: var(--text-icon);
 }
 
+/* Plain-text / regex search mode indicator, inside the search bar */
+#search-mode-toggle {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-icon);
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+#search-mode-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+
+#search-mode-toggle.active {
+  background: var(--bg-active);
+  color: var(--text-on-active);
+}
+
 #debug-timer {
   font-size: 13px;
   font-variant-numeric: tabular-nums;

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { Channel, ViewMode, StreamCheckResult } from './types';
+import type { Channel, ViewMode, SearchMode, StreamCheckResult } from './types';
 import MainView from './MainView';
 import SettingsView from './SettingsView';
 
@@ -21,6 +21,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('channels');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchMode, setSearchMode] = useState<SearchMode>('plain');
   const [stripSuperscript, setStripSuperscript] = useState(false);
   const [drillCategory, setDrillCategory] = useState<string | null>(null);
   const [debugText, setDebugText] = useState('');
@@ -31,12 +32,13 @@ export default function App() {
   const loadChannels = useCallback(async () => {
     try {
       const t0 = performance.now();
-      const [channels, favUrls, favCategories, histUrls, stripSetting] = await Promise.all([
+      const [channels, favUrls, favCategories, histUrls, stripSetting, searchModeSetting] = await Promise.all([
         window.electronAPI.getChannels(),
         window.electronAPI.getFavourites(),
         window.electronAPI.getFavouriteCategories(),
         window.electronAPI.getHistory(),
         window.electronAPI.getSetting('strip_superscript'),
+        window.electronAPI.getSetting('search_mode'),
       ]);
       console.log(`[renderer] getChannels + getFavourites + getHistory: ${performance.now() - t0}ms`);
 
@@ -45,6 +47,7 @@ export default function App() {
       setFavouriteCategories(new Set(favCategories));
       setHistoryUrls(histUrls);
       setStripSuperscript(stripSetting === '1');
+      setSearchMode(searchModeSetting === 'regex' ? 'regex' : 'plain');
       setDebugText(`${channels.length} channels loaded`);
       console.log(`[renderer] total loadChannels: ${performance.now() - t0}ms`);
     } catch (e) {
@@ -259,9 +262,19 @@ export default function App() {
     setSettingsOpen(prev => !prev);
   };
 
+  const toggleSearchMode = useCallback(() => {
+    setSearchMode(prev => {
+      const next = prev === 'regex' ? 'plain' : 'regex';
+      window.electronAPI.setSetting('search_mode', next);
+      return next;
+    });
+  }, []);
 
 
-  const searchPlaceholder = drillCategory
+
+  const searchPlaceholder = searchMode === 'regex'
+    ? 'Regex, e.g. tnt sports [1-4]'
+    : drillCategory
     ? 'Search in category...'
     : viewMode === 'channels'
       ? 'Search channels...'
@@ -300,6 +313,16 @@ export default function App() {
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
           />
+          <button
+            id="search-mode-toggle"
+            className={searchMode === 'regex' ? 'active' : ''}
+            title={searchMode === 'regex'
+              ? 'Regex search — click for plain text'
+              : 'Plain text search — click for regex'}
+            onClick={toggleSearchMode}
+          >
+            .*
+          </button>
         </div>
         <div className="nav-right">
           <span id="debug-timer">{debugText}</span>
@@ -373,6 +396,7 @@ export default function App() {
             historyUrls={historyUrls}
             viewMode={viewMode}
             searchQuery={searchQuery}
+            searchMode={searchMode}
             stripSuperscript={stripSuperscript}
             drillCategory={drillCategory}
             setDrillCategory={handleDrillCategory}

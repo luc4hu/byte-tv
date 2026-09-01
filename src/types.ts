@@ -44,6 +44,8 @@ export interface XtreamPlaylistDetails {
 
 export type ViewMode = 'channels' | 'categories' | 'history' | 'favourites';
 
+export type SearchMode = 'plain' | 'regex';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface LogEntry {
