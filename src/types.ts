@@ -86,6 +86,7 @@ declare global {
       onRefreshProgress: (callback: (progress: RefreshProgress) => void) => () => void;
       getChannels: () => Promise<Channel[]>;
       playChannel: (url: string, skipHistory?: boolean) => Promise<void>;
+      appendSearch: (query: string) => Promise<void>;
       getHistory: () => Promise<string[]>;
       getFavourites: () => Promise<string[]>;
       toggleFavourite: (streamUrl: string) => Promise<{ isFavourite: boolean }>;

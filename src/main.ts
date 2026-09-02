@@ -284,6 +284,7 @@ let streamCheckCancelled = false;
 let streamCheckChild: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
 let logsWindow: BrowserWindow | null = null;
+let searchLogWriteQueue = Promise.resolve();
 
 // mpv uses Unix domain sockets on Linux/macOS, named pipes on Windows.
 // Node's net.createConnection needs the \\\\.\\pipe\\ prefix on Windows.
@@ -547,6 +548,22 @@ function initDB() {
 function registerIPC() {
   // App
   ipcMain.handle('app:getVersion', () => app.getVersion());
+
+  // Search history is deliberately independent of the rotating application
+  // logs: every input change is appended permanently, in arrival order.
+  ipcMain.handle('search:append', (_event, query: string) => {
+    if (typeof query !== 'string') throw new TypeError('Search query must be a string');
+    const singleLineQuery = query.replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+    const write = searchLogWriteQueue.then(() => fs.promises.appendFile(
+      path.join(app.getPath('userData'), 'searches.log'),
+      `${singleLineQuery}\n`,
+      'utf8',
+    ));
+    searchLogWriteQueue = write.catch((error) => {
+      logError('[search:append]', error);
+    });
+    return write;
+  });
 
   // Playlist management
   ipcMain.handle('playlists:addFromURL', async (_event, name: string, url: string) => {

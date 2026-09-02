@@ -270,6 +270,13 @@ export default function App() {
     });
   }, []);
 
+  const handleSearchChange = useCallback((query: string) => {
+    setSearchQuery(query);
+    void window.electronAPI.appendSearch(query).catch((error) => {
+      void window.electronAPI.logFromRenderer('error', `append search: ${String(error)}`);
+    });
+  }, []);
+
 
 
   const searchPlaceholder = searchMode === 'regex'
@@ -311,7 +318,7 @@ export default function App() {
             ref={searchInputRef}
             placeholder={searchPlaceholder}
             value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
+            onChange={e => handleSearchChange(e.target.value)}
           />
           <button
             id="search-mode-toggle"
