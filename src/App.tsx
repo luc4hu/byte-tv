@@ -18,6 +18,7 @@ export default function App() {
   // when nothing is marked. Empty while settings are open (MainView unmounted).
   const [visibleUrls, setVisibleUrls] = useState<string[]>([]);
   const [historyUrls, setHistoryUrls] = useState<string[]>([]);
+  const [nowPlayingToast, setNowPlayingToast] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('channels');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -26,8 +27,11 @@ export default function App() {
   const [drillCategory, setDrillCategory] = useState<string | null>(null);
   const [debugText, setDebugText] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const playbackTrailRef = useRef<{ urls: string[]; index: number }>({ urls: [], index: -1 });
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Search active in the categories view before drilling in, restored on drill-out
   const savedCategorySearchRef = useRef('');
+  const channelByUrl = useMemo(() => new Map(allChannels.map(ch => [ch.stream_url, ch])), [allChannels]);
 
   const loadChannels = useCallback(async () => {
     try {
@@ -133,27 +137,6 @@ export default function App() {
     setDrillCategory(cat);
   }, [drillCategory, searchQuery]);
 
-  // Go back one level: leave settings, else drill out of a category.
-  const goBack = useCallback(() => {
-    if (settingsOpen) {
-      setSettingsOpen(false);
-    } else if (drillCategory !== null) {
-      handleDrillCategory(null);
-    }
-  }, [settingsOpen, drillCategory, handleDrillCategory]);
-
-  // Mouse "back" button (button 3) acts like clicking the Back button
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (e.button === 3) {
-        e.preventDefault();
-        goBack();
-      }
-    };
-    document.addEventListener('mouseup', handler);
-    return () => document.removeEventListener('mouseup', handler);
-  }, [goBack]);
-
   const handleToggleFavourite = useCallback(async (streamUrl: string) => {
     const { isFavourite } = await window.electronAPI.toggleFavourite(streamUrl);
     setFavouriteUrls(prev => {
@@ -238,8 +221,16 @@ export default function App() {
     return best;
   }, [checkResults]);
 
-  const handlePlayChannel = useCallback((streamUrl: string, skipHistory = false) => {
-    window.electronAPI.playChannel(streamUrl, skipHistory);
+  const playChannel = useCallback((streamUrl: string, skipHistory = false) => {
+    void window.electronAPI.playChannel(streamUrl, skipHistory).catch(error => {
+      void window.electronAPI.logFromRenderer('error', `play channel: ${String(error)}`);
+    });
+    const channel = channelByUrl.get(streamUrl);
+    if (channel) {
+      setNowPlayingToast(channel.name);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setNowPlayingToast(null), 2500);
+    }
     if (!skipHistory) {
       setHistoryUrls(prev => {
         const next = prev.filter(u => u !== streamUrl);
@@ -247,6 +238,49 @@ export default function App() {
         return next;
       });
     }
+  }, [channelByUrl]);
+
+  const handlePlayChannel = useCallback((streamUrl: string, skipHistory = false) => {
+    const trail = playbackTrailRef.current;
+    if (trail.urls[trail.index] !== streamUrl) {
+      trail.urls = [...trail.urls.slice(0, trail.index + 1), streamUrl];
+      trail.index = trail.urls.length - 1;
+    }
+    playChannel(streamUrl, skipHistory);
+  }, [playChannel]);
+
+  const navigatePlayback = useCallback((direction: -1 | 1) => {
+    const trail = playbackTrailRef.current;
+    for (let index = trail.index + direction; index >= 0 && index < trail.urls.length; index += direction) {
+      const url = trail.urls[index];
+      if (!channelByUrl.has(url)) continue;
+      trail.index = index;
+      playChannel(url);
+      return;
+    }
+  }, [channelByUrl, playChannel]);
+
+  useEffect(() => {
+    const preventNavigation = (e: MouseEvent) => {
+      if (e.button === 3 || e.button === 4) e.preventDefault();
+    };
+    const handleMouseUp = (e: MouseEvent) => {
+      if (e.button !== 3 && e.button !== 4) return;
+      e.preventDefault();
+      navigatePlayback(e.button === 3 ? -1 : 1);
+    };
+    document.addEventListener('mousedown', preventNavigation);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('auxclick', preventNavigation);
+    return () => {
+      document.removeEventListener('mousedown', preventNavigation);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('auxclick', preventNavigation);
+    };
+  }, [navigatePlayback]);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
   }, []);
 
   const handleViewChange = (mode: ViewMode) => {
@@ -419,7 +453,12 @@ export default function App() {
           />
         )}
       </main>
-
+      {nowPlayingToast && (
+        <div className="now-playing-toast" role="status" aria-live="polite">
+          <span>Now playing</span>
+          <strong>{nowPlayingToast}</strong>
+        </div>
+      )}
     </>
   );
 }

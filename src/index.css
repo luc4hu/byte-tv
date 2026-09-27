@@ -259,6 +259,38 @@ main {
   scrollbar-gutter: stable;
 }
 
+.now-playing-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 18px;
+  border: 1px solid var(--border-hover);
+  border-radius: 10px;
+  background: var(--bg-toolbar);
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  text-align: center;
+}
+
+.now-playing-toast span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.now-playing-toast strong {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
 #channel-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
