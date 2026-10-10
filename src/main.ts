@@ -282,6 +282,7 @@ let mpvChild: ChildProcess | null = null;
 let streamCheckActive = false;
 let streamCheckCancelled = false;
 let streamCheckChild: ChildProcess | null = null;
+let streamCheckAbort: AbortController | null = null;
 let mainWindow: BrowserWindow | null = null;
 let logsWindow: BrowserWindow | null = null;
 let searchLogWriteQueue = Promise.resolve();
@@ -477,6 +478,51 @@ function parseStreamBanner(stderr: string): StreamBanner | null {
     };
   }
   return null;
+}
+
+// Xtream panels answer a stream URL with a 302 to the edge server that will
+// actually serve it, and some park dead channels on a fixed placeholder clip
+// instead (seen: http://<ip>/video/black.ts). Reading just that redirect
+// classifies a channel in a few hundred ms without pulling any video.
+const BLANK_PLACEHOLDER_RE = /\/black\.ts(?:$|\?)/i;
+const REDIRECT_PROBE_TIMEOUT_MS = 5000;
+// Redirect probes don't count against the provider's max_connections (only
+// the video transfer behind the redirect does), so they can run concurrently
+// even on single-connection accounts — verified with a stream open alongside.
+const REDIRECT_PROBE_CONCURRENCY = 10;
+
+// Returns a final result when the redirect alone settles the check, or null
+// when the stream has to be decoded by checkStream.
+async function probeRedirect(url: string, signal: AbortSignal): Promise<StreamCheckResult | null> {
+  if (!/^https?:\/\//i.test(url)) return { streamUrl: url, status: 'offline', error: 'unsupported url' };
+  const t0 = Date.now();
+  let result: StreamCheckResult | null;
+  try {
+    // Node's fetch rather than net.fetch: with redirect 'manual' it hands back
+    // the real 3xx response including its Location header.
+    const res = await fetch(url, {
+      redirect: 'manual',
+      signal: AbortSignal.any([signal, AbortSignal.timeout(REDIRECT_PROBE_TIMEOUT_MS)]),
+    });
+    // Never read the body — on a 200 it's the live stream itself.
+    await res.body?.cancel().catch(() => undefined);
+    const location = res.headers.get('location') ?? '';
+    if (res.status >= 300 && res.status < 400 && BLANK_PLACEHOLDER_RE.test(location)) {
+      result = { streamUrl: url, status: 'blank', error: 'placeholder redirect' };
+    } else if (res.status >= 400) {
+      result = { streamUrl: url, status: 'offline', error: `http ${res.status}` };
+    } else {
+      result = null;
+    }
+  } catch (e) {
+    if (signal.aborted) return null;
+    // Timeouts/network errors are left to the full check, which has its own
+    // timeouts and reports the failure properly.
+    logDebug('[streamcheck:probe]', `${url} failed: ${String(e)}`);
+    return null;
+  }
+  if (result) logInfo('[streamcheck]', `${url} -> ${result.status} (${result.error}) in ${Date.now() - t0}ms`);
+  return result;
 }
 
 // One ffmpeg call does the whole check: read the stream banner for
@@ -899,10 +945,30 @@ function registerIPC() {
     const push = (r: StreamCheckResult) => {
       if (!sender.isDestroyed()) sender.send('streamcheck:result', r);
     };
+    const abort = new AbortController();
+    streamCheckAbort = abort;
+    const stopped = () => streamCheckCancelled || sender.isDestroyed();
     let done = 0;
     try {
-      for (const url of urls) {
-        if (streamCheckCancelled || sender.isDestroyed()) break;
+      // Pass 1: concurrent redirect probes settle placeholder/HTTP-error
+      // channels. The rest stay 'pending' for pass 2.
+      const needsDecode: string[] = [];
+      let next = 0;
+      const worker = async () => {
+        while (next < urls.length && !stopped()) {
+          const i = next++;
+          const r = await probeRedirect(urls[i], abort.signal);
+          if (stopped()) return;
+          if (r) { push(r); done++; } else needsDecode[i] = urls[i];
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(REDIRECT_PROBE_CONCURRENCY, urls.length) }, worker));
+      logInfo('[streamcheck]', `redirect pass: ${done}/${urls.length} settled in ${Date.now() - t0}ms`);
+
+      // Pass 2: full decode, strictly sequential — this one pulls real video
+      // and does count against the provider's connection limit.
+      for (const url of needsDecode.filter(Boolean)) {
+        if (stopped()) break;
         push({ streamUrl: url, status: 'checking' });
         push(await checkStream(url));
         done++;
@@ -910,6 +976,7 @@ function registerIPC() {
     } finally {
       streamCheckActive = false;
       streamCheckChild = null;
+      streamCheckAbort = null;
       logInfo('[streamcheck]', `run finished: ${done}/${urls.length} checked in ${Date.now() - t0}ms${streamCheckCancelled ? ' (cancelled)' : ''}`);
     }
   });
@@ -917,6 +984,7 @@ function registerIPC() {
   ipcMain.handle('streamcheck:cancel', () => {
     streamCheckCancelled = true;
     streamCheckChild?.kill('SIGKILL');
+    streamCheckAbort?.abort();
   });
 
   // Logging

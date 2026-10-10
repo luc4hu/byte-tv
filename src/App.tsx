@@ -203,19 +203,23 @@ export default function App() {
   }, []);
 
   const bestUrls = useMemo(() => {
+    // fps is compared by tier, not exact value: 25/30 (and 23.976/29.97) are
+    // the same broadcast standard in different regions, as are 50/60.
+    const fpsTier = (fps: number | undefined) => ((fps ?? 0) > 40 ? 1 : 0);
     let bestH = 0;
     let bestF = 0;
     for (const r of checkResults.values()) {
       if (r.status !== 'ok' || !r.height) continue;
-      if (r.height > bestH || (r.height === bestH && (r.fps ?? 0) > bestF)) {
+      const tier = fpsTier(r.fps);
+      if (r.height > bestH || (r.height === bestH && tier > bestF)) {
         bestH = r.height;
-        bestF = r.fps ?? 0;
+        bestF = tier;
       }
     }
     const best = new Set<string>();
     if (bestH > 0) {
       for (const r of checkResults.values()) {
-        if (r.status === 'ok' && r.height === bestH && (r.fps ?? 0) === bestF) best.add(r.streamUrl);
+        if (r.status === 'ok' && r.height === bestH && fpsTier(r.fps) === bestF) best.add(r.streamUrl);
       }
     }
     return best;
