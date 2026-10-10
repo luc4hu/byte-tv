@@ -3,6 +3,13 @@ import type { Channel, ViewMode, SearchMode, StreamCheckResult } from './types';
 import MainView from './MainView';
 import SettingsView from './SettingsView';
 
+// Providers pad playlists with fake "channels" that are really section
+// headers, e.g. "####### DAZN CANADA PPV #######". Their URLs still resolve to
+// a stream, so checking them would cost a full decode each for nothing.
+function isSectionHeader(name: string): boolean {
+  return /^#{2,}.*#{2,}$/.test(name.trim());
+}
+
 function initTheme() {
   document.documentElement.setAttribute('data-theme', 'dark');
 }
@@ -172,13 +179,21 @@ export default function App() {
     });
   }, []);
 
+  const checkableUrls = useMemo(
+    () => new Set(allChannels.filter(ch => !isSectionHeader(ch.name)).map(ch => ch.stream_url)),
+    [allChannels],
+  );
+  const visibleCheckableUrls = useMemo(
+    () => [...new Set(visibleUrls)].filter(u => checkableUrls.has(u)),
+    [visibleUrls, checkableUrls],
+  );
+
   const handleStartCheck = useCallback(async () => {
     // Marked channels take priority; with none marked, check everything
     // currently found in the view. Dedupe — playlists can share stream URLs.
-    const live = new Set(allChannels.map(ch => ch.stream_url));
     const urls = markedUrls.size > 0
-      ? [...markedUrls].filter(u => live.has(u))
-      : [...new Set(visibleUrls)];
+      ? [...markedUrls].filter(u => checkableUrls.has(u))
+      : visibleCheckableUrls;
     if (urls.length === 0) return;
     setChecking(true);
     setCheckResults(new Map(urls.map(u => [u, { streamUrl: u, status: 'pending' as const }])));
@@ -191,7 +206,7 @@ export default function App() {
       // Drop entries left pending/checking by a cancel mid-run
       setCheckResults(prev => new Map([...prev].filter(([, r]) => r.status !== 'pending' && r.status !== 'checking')));
     }
-  }, [markedUrls, allChannels, visibleUrls]);
+  }, [markedUrls, checkableUrls, visibleCheckableUrls]);
 
   const handleCancelCheck = useCallback(() => {
     window.electronAPI.cancelStreamCheck();
@@ -384,9 +399,9 @@ export default function App() {
                 ? 'Stop checking'
                 : markedUrls.size > 0
                   ? `Check ${markedUrls.size} marked stream${markedUrls.size === 1 ? '' : 's'}`
-                  : `Check ${new Set(visibleUrls).size} visible channels`
+                  : `Check ${visibleCheckableUrls.length} visible channels`
             }
-            disabled={!checking && markedUrls.size === 0 && visibleUrls.length === 0}
+            disabled={!checking && markedUrls.size === 0 && visibleCheckableUrls.length === 0}
             onClick={checking ? handleCancelCheck : handleStartCheck}
           >
             {checking ? (
