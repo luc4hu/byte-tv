@@ -82,7 +82,6 @@ interface MainViewProps {
   drillCategory: string | null;
   markedUrls: Set<string>;
   checkResults: Map<string, StreamCheckResult>;
-  bestUrls: Set<string>;
   setDrillCategory: (cat: string | null) => void;
   onToggleMarked: (streamUrl: string) => void;
   onVisibleChannels: (urls: string[]) => void;
@@ -104,7 +103,6 @@ export default function MainView({
   drillCategory,
   markedUrls,
   checkResults,
-  bestUrls,
   setDrillCategory,
   onToggleMarked,
   onVisibleChannels,
@@ -335,7 +333,7 @@ export default function MainView({
               if (loadingUrl === ch.stream_url) classes.push('loading');
               if (markedUrls.has(ch.stream_url)) classes.push('marked');
               if (res?.status === 'checking') classes.push('checking');
-              if (res?.status === 'ok' && bestUrls.has(ch.stream_url)) classes.push('best');
+              if (res?.status === 'ok') classes.push(`check-${checkBadgeColorClass(res)}`);
               return (
                 <div key={`channel-${ch.id}`} className={classes.join(' ')} data-url={ch.stream_url} title={name}>
                   {favouriteUrls.has(ch.stream_url) && <span className="favourite-star">&#9733;</span>}
@@ -362,7 +360,7 @@ export default function MainView({
               if (loadingUrl === ch.stream_url) classes.push('loading');
               if (markedUrls.has(ch.stream_url)) classes.push('marked');
               if (res?.status === 'checking') classes.push('checking');
-              if (res?.status === 'ok' && bestUrls.has(ch.stream_url)) classes.push('best');
+              if (res?.status === 'ok') classes.push(`check-${checkBadgeColorClass(res)}`);
               return (
                 <div
                   key={ch.id}

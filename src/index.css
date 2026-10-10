@@ -331,7 +331,7 @@ main {
 }
 
 /* Same specificity as :hover — source order below makes these borders win.
-   .best comes after .marked so the winner's green beats the queued blue. */
+   Check-result colors come after .marked so they replace the queued blue. */
 .channel-card.marked {
   border-color: #3b82f6;
 }
@@ -340,8 +340,18 @@ main {
   animation: pulse 1.5s ease-in-out infinite;
 }
 
-.channel-card.best {
+/* Healthy check results take their badge's tier color; blank/offline keep
+   the default border. */
+.channel-card.check-uhd {
+  border-color: #3b82f6;
+}
+
+.channel-card.check-hd {
   border-color: #22c55e;
+}
+
+.channel-card.check-sd {
+  border-color: #f97316;
 }
 
 .channel-card.loading {

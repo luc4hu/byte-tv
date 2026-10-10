@@ -217,29 +217,6 @@ export default function App() {
     setCheckResults(new Map());
   }, []);
 
-  const bestUrls = useMemo(() => {
-    // fps is compared by tier, not exact value: 25/30 (and 23.976/29.97) are
-    // the same broadcast standard in different regions, as are 50/60.
-    const fpsTier = (fps: number | undefined) => ((fps ?? 0) > 40 ? 1 : 0);
-    let bestH = 0;
-    let bestF = 0;
-    for (const r of checkResults.values()) {
-      if (r.status !== 'ok' || !r.height) continue;
-      const tier = fpsTier(r.fps);
-      if (r.height > bestH || (r.height === bestH && tier > bestF)) {
-        bestH = r.height;
-        bestF = tier;
-      }
-    }
-    const best = new Set<string>();
-    if (bestH > 0) {
-      for (const r of checkResults.values()) {
-        if (r.status === 'ok' && r.height === bestH && fpsTier(r.fps) === bestF) best.add(r.streamUrl);
-      }
-    }
-    return best;
-  }, [checkResults]);
-
   const playChannel = useCallback((streamUrl: string, skipHistory = false) => {
     void window.electronAPI.playChannel(streamUrl, skipHistory).catch(error => {
       void window.electronAPI.logFromRenderer('error', `play channel: ${String(error)}`);
@@ -462,7 +439,6 @@ export default function App() {
             setDrillCategory={handleDrillCategory}
             markedUrls={markedUrls}
             checkResults={checkResults}
-            bestUrls={bestUrls}
             onToggleMarked={handleToggleMarked}
             onVisibleChannels={setVisibleUrls}
             onToggleFavourite={handleToggleFavourite}
